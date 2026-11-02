@@ -14,6 +14,7 @@ import path from "node:path";
 import {
   applyMigrations,
   baselineMigrations,
+  listMigrations,
   MIGRATIONS_DIR,
   rollbackMigrations,
 } from "../scripts/migrate.mjs";
@@ -22,10 +23,15 @@ import { makeEmptyDb } from "./support/fixtures.ts";
 const USING_REAL_PG = Boolean(process.env["TEST_DATABASE_URL"]);
 const SKIP_NO_PG = USING_REAL_PG ? false : "requiere PostgreSQL real: pg-mem ignora ROLLBACK";
 
+// Derivados del directorio: añadir una migración no debe romper la suite.
+const UP_NAMES = (await listMigrations("up")).map((file) => path.basename(file));
+const DOWN_NAMES = (await listMigrations("down")).map((file) => path.basename(file));
+const VERSIONS = UP_NAMES.map((name) => name.split("_")[0]);
+
 async function withTempCopy(fn) {
   const dir = await mkdtemp(path.join(tmpdir(), "ueas-mig-"));
   try {
-    for (const name of ["001_users.up.sql", "001_users.down.sql", "002_refresh_tokens.up.sql", "002_refresh_tokens.down.sql"]) {
+    for (const name of [...UP_NAMES, ...DOWN_NAMES]) {
       await cp(path.join(MIGRATIONS_DIR, name), path.join(dir, name));
     }
     return await fn(dir);
@@ -37,12 +43,12 @@ async function withTempCopy(fn) {
 test("up aplica y registra cada migración con su checksum", async () => {
   const db = await makeEmptyDb();
   const done = await applyMigrations(db);
-  assert.deepEqual(done, ["001_users.up.sql", "002_refresh_tokens.up.sql"]);
+  assert.deepEqual(done, UP_NAMES);
 
   const rows = await db.query("select version, name, checksum from schema_migrations order by version");
-  assert.equal(rows.rows.length, 2);
-  assert.deepEqual(rows.rows.map((r) => r.version), ["001", "002"]);
-  assert.deepEqual(rows.rows.map((r) => r.name), ["001_users.up.sql", "002_refresh_tokens.up.sql"]);
+  assert.equal(rows.rows.length, UP_NAMES.length);
+  assert.deepEqual(rows.rows.map((r) => r.version), VERSIONS);
+  assert.deepEqual(rows.rows.map((r) => r.name), UP_NAMES);
   for (const row of rows.rows) assert.match(row.checksum, /^[0-9a-f]{64}$/);
 });
 
@@ -54,7 +60,7 @@ test("segunda ejecución de up no aplica nada y no lanza (idempotencia)", async 
   assert.deepEqual(second, [], "no debe haber pendientes");
 
   const rows = await db.query("select count(*)::int as n from schema_migrations");
-  assert.equal(rows.rows[0].n, 2, "el libro no debe duplicar filas");
+  assert.equal(rows.rows[0].n, UP_NAMES.length, "el libro no debe duplicar filas");
 });
 
 test("down revierte lo aplicado y borra sus filas del libro", async () => {
@@ -62,7 +68,7 @@ test("down revierte lo aplicado y borra sus filas del libro", async () => {
   await applyMigrations(db);
 
   const reverted = await rollbackMigrations(db);
-  assert.deepEqual(reverted, ["002_refresh_tokens.down.sql", "001_users.down.sql"]);
+  assert.deepEqual(reverted, DOWN_NAMES);
 
   const after = await db.query("select count(*)::int as n from schema_migrations");
   assert.equal(after.rows[0].n, 0);
@@ -76,7 +82,7 @@ test("tras el down, up vuelve a aplicar (solo PostgreSQL real)", { skip: SKIP_NO
   await rollbackMigrations(db);
 
   const again = await applyMigrations(db);
-  assert.deepEqual(again, ["001_users.up.sql", "002_refresh_tokens.up.sql"]);
+  assert.deepEqual(again, UP_NAMES);
 });
 
 test("down sin nada aplicado no hace nada y no lanza", async () => {
@@ -139,15 +145,15 @@ test("baseline registra una base ya migrada sin ejecutar nada", async () => {
   const db = await makeEmptyDb();
 
   // Simula una base migrada con la versión anterior del runner: esquema sí, libro no.
-  for (const name of ["001_users.up.sql", "002_refresh_tokens.up.sql"]) {
+  for (const name of UP_NAMES) {
     await db.query(await readFile(path.join(MIGRATIONS_DIR, name), "utf8"));
   }
 
   const registered = await baselineMigrations(db);
-  assert.deepEqual(registered, ["001_users.up.sql", "002_refresh_tokens.up.sql"]);
+  assert.deepEqual(registered, UP_NAMES);
 
   const rows = await db.query("select version, checksum from schema_migrations order by version");
-  assert.equal(rows.rows.length, 2);
+  assert.equal(rows.rows.length, UP_NAMES.length);
   for (const row of rows.rows) assert.match(row.checksum, /^[0-9a-f]{64}$/);
 
   // Y ahora un up no intenta recrear tablas.
@@ -170,10 +176,10 @@ test("dos procesos aplicando a la vez: uno aplica, el otro no duplica", { skip: 
     const results = await Promise.all([applyMigrations(first), applyMigrations(second)]);
     const applied = results.flat().sort();
 
-    assert.deepEqual(applied, ["001_users.up.sql", "002_refresh_tokens.up.sql"], "entre los dos, exactamente una vez cada una");
+    assert.deepEqual(applied, UP_NAMES, "entre los dos, exactamente una vez cada una");
 
     const rows = await first.query("select count(*)::int as n from schema_migrations");
-    assert.equal(rows.rows[0].n, 2, "sin filas duplicadas");
+    assert.equal(rows.rows[0].n, UP_NAMES.length, "sin filas duplicadas");
   } finally {
     await first.end();
     await second.end();

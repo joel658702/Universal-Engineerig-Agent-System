@@ -1,0 +1,84 @@
+{
+  "task_id": "TASK-003",
+  "agent": "BUILDER",
+  "requirement": "Implementar recuperación de contraseña: solicitud anti-enumeración, token de un solo uso con TTL ≤ 15 min, restablecimiento que revoca todas las sesiones vía token_version, rate limiting reutilizado y envío simulado sin exponer el token en logs.",
+  "risk": {
+    "level": "L4",
+    "justification": "El token de recuperación es una credencial portadora: quien lo tenga cambia la contraseña sin conocer la anterior. Eso define un mecanismo nuevo de prueba de identidad (F4=4), no consume uno existente. Un fallo permite toma de cuentas. L4 exige 2 aprobadores o dispensa nueva: EX-001 se cerró con TASK-001 y no se propaga.",
+    "factors": { "F1": 4, "F2": 2, "F3": 2, "F4": 4, "F5": 1, "F6": 3 }
+  },
+  "confirmation": {
+    "required": true,
+    "status": "granted",
+    "granted_by": "DE-004 — dispensa de doble firma (operador humano, 2026-11-02). El campo 'dispensation' no existe en el esquema; se registra aquí por additionalProperties:false."
+  },
+  "plan": [
+    {
+      "step": 1,
+      "description": "Migración 003: tabla password_resets con user_id FK, token_hash (sha256 hex, 64), created_at, expires_at, used_at, ip_hash; índices único por hash, parcial por usuario sin usar y por expiración.",
+      "verifiable_by": "migrate up aplica 003 y migrate down la revierte sin dejar residuos"
+    },
+    {
+      "step": 2,
+      "description": "Token de 256 bits aleatorios, guardado solo como SHA-256; TTL de 15 minutos desde la creación y validado en consulta, no en aplicación.",
+      "verifiable_by": "test: un token con expires_at pasado no se acepta; el valor en claro no aparece en la tabla"
+    },
+    {
+      "step": 3,
+      "description": "POST /auth/forgot-password responde siempre 202 con el mismo cuerpo; se genera token y se consulta/inserta igual exista o no el correo, con una consulta no-op equivalente para igualar el número de round-trips.",
+      "verifiable_by": "test: 202 y cuerpo idénticos para correo real e inexistente; medición de medianas de latencia con tolerancia declarada"
+    },
+    {
+      "step": 4,
+      "description": "Rate limit reutilizando F5: 3/min por IP y 3/min por hash del correo, aplicado por igual a correos existentes e inexistentes para que el 429 no sea un oráculo.",
+      "verifiable_by": "test: cuarto intento → 429 con Retry-After, también con correo inexistente; los contadores de ambos casos se comportan igual"
+    },
+    {
+      "step": 5,
+      "description": "POST /auth/reset-password consume el token con un UPDATE atómico (used_at IS NULL AND expires_at > now()) dentro de una transacción que además revoca todos los refresh del usuario y sube token_version.",
+      "verifiable_by": "test: 204, contraseña nueva funciona, access y refresh anteriores dan 401; el token no se puede reutilizar"
+    },
+    {
+      "step": 6,
+      "description": "Al consumirse un token, invalidar los demás pendientes del mismo usuario en la misma transacción.",
+      "verifiable_by": "test: dos solicitudes seguidas, uso de la segunda → la primera deja de servir"
+    },
+    {
+      "step": 7,
+      "description": "Envío simulado tras un puerto Mailer: adaptador dev (outbox en memoria + GET /_dev/outbox montado solo con NODE_ENV=development y AUTH_DEV_OUTBOX=1) y adaptador nulo en producción que registra solo el id de usuario, nunca el token.",
+      "verifiable_by": "test: el endpoint dev devuelve el token solo en modo development; en producción responde 404; el log no contiene el token"
+    },
+    {
+      "step": 8,
+      "description": "Errores de reset indistinguibles entre token inexistente, expirado o ya usado: un único 400 invalid_token.",
+      "verifiable_by": "test: los tres casos devuelven el mismo estado y cuerpo"
+    }
+  ],
+  "files_expected": [
+    { "path": "services/auth/migrations/003_password_resets.up.sql", "action": "create" },
+    { "path": "services/auth/migrations/003_password_resets.down.sql", "action": "create" },
+    { "path": "services/auth/src/passwordReset.ts", "action": "create" },
+    { "path": "services/auth/src/mailer.ts", "action": "create" },
+    { "path": "services/auth/src/app.ts", "action": "modify" },
+    { "path": "services/auth/test/passwordReset.test.ts", "action": "create" },
+    { "path": "TECH_DEBT.md", "action": "modify" },
+    { "path": ".ueas/evidence/UEAS-019-task003.evidence.json", "action": "create" }
+  ],
+  "evidence_planned": [
+    "salida de la suite completa contra PostgreSQL 16 real con los tests nuevos",
+    "medición de latencia p50/p95 para correo existente e inexistente con la tolerancia aplicada",
+    "select de password_resets mostrando used_at tras el consumo y ausencia del token en claro",
+    "prueba de que el access y el refresh anteriores al reset devuelven 401",
+    "prueba de concurrencia: dos reset simultáneos con el mismo token → un 204 y un 401",
+    "salida del endpoint dev en development y 404 en producción"
+  ],
+  "rollback": "migrate down de 003, revertir app.ts y eliminar passwordReset.ts, mailer.ts y su test. Los usuarios y sus contraseñas no se tocan salvo por el flujo en sí.",
+  "stop_conditions": [
+    "Si se requiere añadir una dependencia de correo real, se detiene: en sandbox no hay SMTP y el plan es simular el envío",
+    "Si la igualdad de tiempos no puede sostenerse con una tolerancia razonable, se reporta en lugar de afirmarla",
+    "Si el consumo del token no puede ser atómico con el cambio de contraseña, se detiene y se consulta",
+    "Si el operador no aporta segunda firma ni dispensa, no se ejecuta (L4)"
+  ],
+  "state": "PROPUESTA",
+  "created_at": "2026-11-02T10:45:00-05:00"
+}

@@ -10,9 +10,14 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
+import path from "node:path";
 import { newDb, DataType } from "pg-mem";
 
-import { applyMigrations, rollbackMigrations } from "../scripts/migrate.mjs";
+import { applyMigrations, listMigrations, rollbackMigrations } from "../scripts/migrate.mjs";
+
+// Los nombres se derivan del directorio: añadir una migración no debe romper tests.
+const UP_NAMES = (await listMigrations("up")).map((file) => path.basename(file));
+const DOWN_NAMES = (await listMigrations("down")).map((file) => path.basename(file));
 
 async function freshClient() {
   const db = newDb();
@@ -51,7 +56,7 @@ async function freshClient() {
 test("las migraciones crean users y refresh_tokens", async () => {
   const client = await freshClient();
   const applied = await applyMigrations(client);
-  assert.deepEqual(applied, ["001_users.up.sql", "002_refresh_tokens.up.sql"]);
+  assert.deepEqual(applied, UP_NAMES);
 
   const users = await client.query("select count(*)::int as n from users");
   assert.equal(users.rows[0].n, 0);
@@ -106,6 +111,6 @@ test("el rollback elimina las tablas en orden inverso", async () => {
   const client = await freshClient();
   await applyMigrations(client);
   const reverted = await rollbackMigrations(client);
-  assert.deepEqual(reverted, ["002_refresh_tokens.down.sql", "001_users.down.sql"]);
+  assert.deepEqual(reverted, DOWN_NAMES);
   await assert.rejects(() => client.query("select 1 from users"), /no existe|does not exist|not find/i);
 });

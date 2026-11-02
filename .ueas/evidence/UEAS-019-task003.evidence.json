@@ -1,0 +1,132 @@
+{
+  "task_id": "TASK-003",
+  "agent": "BUILDER",
+  "requirement": "Implementar recuperación de contraseña: solicitud anti-enumeración, token de un solo uso con TTL de 15 minutos, restablecimiento que revoca todas las sesiones vía token_version, rate limiting reutilizado y envío simulado sin exponer el token en logs.",
+  "risk": {
+    "level": "L4",
+    "justification": "El token de recuperación es una credencial portadora que define un mecanismo nuevo de prueba de identidad (F4=4). Ejecutado bajo dispensa DE-004, registrada por instrucción directa del operador tras cerrarse EX-001.",
+    "sensitive_data": true,
+    "critical_structures": true
+  },
+  "confirmation": {
+    "required": true,
+    "status": "granted",
+    "granted_by": "DE-004 — dispensa de doble firma para TASK-003 (operador humano, 2026-11-02)"
+  },
+  "changes": [
+    { "path": "services/auth/migrations/003_password_resets.up.sql", "action": "create", "summary": "Tabla password_resets: user_id FK, token_hash (64 hex), created_at, expires_at, used_at, ip_hash; índices único, parcial de pendientes y de expiración." },
+    { "path": "services/auth/migrations/003_password_resets.down.sql", "action": "create", "summary": "Reversión exacta de la tabla." },
+    { "path": "services/auth/src/mailer.ts", "action": "create", "summary": "Puerto Mailer con adaptador dev (outbox en memoria) y nulo; guardia isDevOutboxEnabled que exige development + AUTH_DEV_OUTBOX=1." },
+    { "path": "services/auth/src/passwordReset.ts", "action": "create", "summary": "Token de 256 bits, hash SHA-256, TTL 15 min y consumo atómico en transacción con revocación global y cambio de hash." },
+    { "path": "services/auth/src/app.ts", "action": "modify", "summary": "Rutas POST /auth/forgot-password y POST /auth/reset-password, limitadores por IP y por hash de correo, y GET /_dev/outbox bajo bandera." },
+    { "path": "services/auth/test/passwordReset.test.ts", "action": "create", "summary": "9 tests: flujo completo, uso único, expiración, anti-enumeración (cuerpo y latencia), rate limit por correo, revocación de sesiones y doble guardia." },
+    { "path": "services/auth/test/migrations.test.ts", "action": "modify", "summary": "Las listas de migraciones se derivan del directorio en lugar de estar fijadas a dos archivos." },
+    { "path": "services/auth/test/migrations_runner.test.ts", "action": "modify", "summary": "Igual: nombres y versiones calculados desde listMigrations." },
+    { "path": "TECH_DEBT.md", "action": "modify", "summary": "Partida 4 marcada como RESUELTA con su evidencia." },
+    { "path": ".ueas/decisions/DE-004.md", "action": "create", "summary": "Dispensa de doble firma para TASK-003, con el hecho verificado de que el bloque citado no existía." },
+    { "path": ".ueas/proposals/TASK-003.proposal.json", "action": "modify", "summary": "Estado APROBADA y granted_by con la referencia a DE-004." },
+    { "path": ".ueas/evidence/UEAS-019-task003.evidence.json", "action": "create", "summary": "Evidencia de esta tarea." }
+  ],
+  "verification": [
+    {
+      "check": "Suite completa contra PostgreSQL 16 real",
+      "method": "test_suite",
+      "command": "TEST_DATABASE_URL=... node --test --test-isolation=none \"test/**/*.test.ts\"",
+      "result": "pass",
+      "output_excerpt": "tests 74 · pass 74 · fail 0 · skipped 0"
+    },
+    {
+      "check": "Suite completa con pg-mem",
+      "method": "test_suite",
+      "command": "node --test --test-isolation=none \"test/**/*.test.ts\"",
+      "result": "pass",
+      "output_excerpt": "tests 74 · pass 69 · fail 0 · skipped 5 (los que exigen ROLLBACK real o DDL que pg-mem no replica)"
+    },
+    {
+      "check": "Flujo completo: solicitud → outbox → reset → login con la clave nueva",
+      "method": "test_suite",
+      "command": "test/passwordReset.test.ts :: 'flujo completo...'",
+      "result": "pass",
+      "output_excerpt": "202 {status:'accepted'} · entrada en outbox con el correo · 204 al reset · login viejo 401 · login nuevo 200"
+    },
+    {
+      "check": "Token de un solo uso",
+      "method": "test_suite",
+      "command": "test/passwordReset.test.ts :: 'el token es de un solo uso'",
+      "result": "pass",
+      "output_excerpt": "primer reset 204; segundo con el mismo token 400 invalid_token"
+    },
+    {
+      "check": "Token expirado y token inexistente dan la misma respuesta",
+      "method": "test_suite",
+      "command": "test/passwordReset.test.ts :: 'un token expirado responde 400 igual que uno inexistente'",
+      "result": "pass",
+      "output_excerpt": "400 {error:'invalid_token'}"
+    },
+    {
+      "check": "Anti-enumeración por cuerpo y estado",
+      "method": "test_suite",
+      "command": "test/passwordReset.test.ts :: 'mismo estado y cuerpo exista o no la cuenta'",
+      "result": "pass",
+      "output_excerpt": "ambos 202 y deepEqual del cuerpo"
+    },
+    {
+      "check": "Anti-enumeración por latencia (tolerancia declarada de 50 ms)",
+      "method": "test_suite",
+      "command": "test/passwordReset.test.ts :: 'la latencia no distingue cuentas'",
+      "result": "pass",
+      "output_excerpt": "8 muestras por rama; |mediana_real − mediana_inexistente| < 50 ms"
+    },
+    {
+      "check": "Rate limit por hash de correo, exista o no la cuenta",
+      "method": "test_suite",
+      "command": "test/passwordReset.test.ts :: 'el cuarto intento falla exista o no la cuenta'",
+      "result": "pass",
+      "output_excerpt": "3×202 y 4º 429 con Retry-After, para correo real y para inexistente; el cuerpo del 429 es idéntico"
+    },
+    {
+      "check": "Revocación de sesiones tras el reset",
+      "method": "test_suite",
+      "command": "test/passwordReset.test.ts :: 'las sesiones anteriores quedan revocadas'",
+      "result": "pass",
+      "output_excerpt": "/auth/me con el access anterior → 401; /auth/refresh con el refresh anterior → 401"
+    },
+    {
+      "check": "Doble guardia del outbox de desarrollo",
+      "method": "test_suite",
+      "command": "test/passwordReset.test.ts :: 'sin la doble guardia...' + 'la doble guardia exige...'",
+      "result": "pass",
+      "output_excerpt": "sin bandera → 404; isDevOutboxEnabled solo true con NODE_ENV=development y AUTH_DEV_OUTBOX=1"
+    },
+    {
+      "check": "Drill F7 tras añadir la migración 003",
+      "method": "test_suite",
+      "command": "node scripts/f7-drill.mjs",
+      "result": "pass",
+      "output_excerpt": "5 comprobaciones, 0 fallos"
+    },
+    {
+      "check": "El token no aparece en logs ni en la base en claro",
+      "method": "read_back",
+      "command": "Get-Content src/mailer.ts src/passwordReset.ts",
+      "result": "pass",
+      "output_excerpt": "El adaptador dev guarda el token solo en memoria; el nulo no registra nada; la BD guarda SHA-256 hex de 64 caracteres (CHECK en la migración)"
+    }
+  ],
+  "evidence_completeness": "complete",
+  "open_risks": [
+    "DE-004 se registró por instrucción directa, no por un texto firmado; el bloque que la instrucción citaba no existía y así consta en la decisión.",
+    "La igualdad de tiempos es aproximada (tolerancia de 50 ms medida con 8 muestras); no es una garantía criptográfica.",
+    "El envío real de correo no existe: el adaptador nulo no envía nada. Enchufar SMTP es trabajo pendiente y añadirá dependencias.",
+    "El endpoint /_dev/outbox debe montarse solo con doble guardia; hoy ningún punto de composición lo hace porque el servidor de auth aún no está cableado en main.ts.",
+    "El código nuevo no se ha ejecutado en el contenedor Linux del CI; la verificación fue en Windows contra PostgreSQL 16 en Docker.",
+    "No hay purga de password_resets caducados (índice listo, sin job)."
+  ],
+  "rollback": "migrate down de 003; revertir app.ts y eliminar mailer.ts, passwordReset.ts y su test. Las contraseñas ya cambiadas por el flujo no se revierten.",
+  "self_approved": false,
+  "approvals": {
+    "verifier": null,
+    "decision": "pending",
+    "notes": "Ejecutado bajo DE-004 (dispensa de una firma). El agente no aprueba su propio trabajo."
+  }
+}

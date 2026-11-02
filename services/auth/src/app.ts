@@ -5,11 +5,13 @@
  * Sin dependencias del driver: recibe un `Queryable`.
  */
 
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import express, { type Express, type NextFunction, type Request, type Response } from "express";
 import { z } from "zod";
 
 import { authenticateRequest } from "./authenticate.ts";
+import { createNullMailer, type DevMailer, type Mailer } from "./mailer.ts";
+import { consumeResetToken, createResetRequest } from "./passwordReset.ts";
 import {
   clearAuthCookies,
   corsMiddleware,
@@ -59,6 +61,20 @@ const changePasswordSchema = z.object({
   new_password: z.string().min(MIN_PASSWORD_LENGTH).max(MAX_PASSWORD_LENGTH),
 });
 
+const forgotPasswordSchema = z.object({
+  email: z
+    .string()
+    .trim()
+    .max(254)
+    .refine((value) => EMAIL_RE.test(value), { message: "invalid_email" })
+    .transform((value) => value.toLowerCase()),
+});
+
+const resetPasswordSchema = z.object({
+  token: z.string().min(20).max(256),
+  new_password: z.string().min(MIN_PASSWORD_LENGTH).max(MAX_PASSWORD_LENGTH),
+});
+
 type Handler = (req: Request, res: Response) => Promise<unknown>;
 
 /** Express 4 no captura rechazos de promesas: se envuelve. */
@@ -73,6 +89,8 @@ export type RateLimitSettings = {
   registerPerIp: { limit: number; windowMs: number };
   passwordPerUser: { limit: number; windowMs: number };
   refreshPerFamily: { limit: number; windowMs: number };
+  forgotPerIp: { limit: number; windowMs: number };
+  forgotPerEmail: { limit: number; windowMs: number };
 };
 
 /** Valores de arranque: ajustables por configuración, no dogma. */
@@ -81,6 +99,8 @@ export const DEFAULT_RATE_LIMITS: RateLimitSettings = {
   registerPerIp: { limit: 5, windowMs: 60_000 },
   passwordPerUser: { limit: 3, windowMs: 60_000 },
   refreshPerFamily: { limit: 10, windowMs: 60_000 },
+  forgotPerIp: { limit: 3, windowMs: 60_000 },
+  forgotPerEmail: { limit: 3, windowMs: 60_000 },
 };
 
 export type AppDeps = {
@@ -94,6 +114,10 @@ export type AppDeps = {
   mode?: AuthMode;
   /** Orígenes permitidos por CORS. Vacío = ninguno (mismo origen). */
   allowedOrigins?: string[];
+  /** Puerto de salida del correo. Por defecto, adaptador nulo. */
+  mailer?: Mailer;
+  /** Monta GET /_dev/outbox. El llamador debe aplicarlo solo con doble guardia. */
+  devOutbox?: boolean;
 };
 
 function rejectRateLimited(res: Response, retryAfterSeconds: number): void {
@@ -115,6 +139,12 @@ export function createApp(deps: AppDeps): Express {
   const registerLimiter: RateLimiter = createRateLimiter({ ...limits.registerPerIp, ...(clock ? { now: clock } : {}) });
   const passwordLimiter: RateLimiter = createRateLimiter({ ...limits.passwordPerUser, ...(clock ? { now: clock } : {}) });
   const refreshLimiter: RateLimiter = createRateLimiter({ ...limits.refreshPerFamily, ...(clock ? { now: clock } : {}) });
+  const forgotIpLimiter: RateLimiter = createRateLimiter({ ...limits.forgotPerIp, ...(clock ? { now: clock } : {}) });
+  const forgotEmailLimiter: RateLimiter = createRateLimiter({ ...limits.forgotPerEmail, ...(clock ? { now: clock } : {}) });
+
+  const mailer: Mailer = deps.mailer ?? createNullMailer();
+  const devOutbox =
+    deps.devOutbox === true && "outbox" in mailer ? (mailer as DevMailer).outbox : null;
 
   const clientIp = (req: Request): string => req.ip ?? req.socket.remoteAddress ?? "unknown";
 
@@ -344,6 +374,70 @@ export function createApp(deps: AppDeps): Express {
       return res.status(204).end();
     }),
   );
+
+  /**
+   * Solicitud de recuperación.
+   *
+   * Anti-enumeración: mismo estado, mismo cuerpo y mismo número de round-trips
+   * exista o no la cuenta. El límite por correo se aplica SIEMPRE con la misma
+   * clave (hash del correo), también para correos inexistentes: si solo se
+   * limitara a los existentes, el 429 sería el oráculo que se quiere evitar.
+   */
+  app.post(
+    "/auth/forgot-password",
+    asyncHandler(async (req, res) => {
+      const parsed = forgotPasswordSchema.safeParse(req.body);
+      if (!parsed.success) return res.status(400).json({ error: "invalid_request" });
+
+      const email = parsed.data.email;
+      const emailKey = createHash("sha256").update(email).digest("hex");
+
+      const ipDecision = forgotIpLimiter.check(`forgot:ip:${clientIp(req)}`);
+      if (!ipDecision.allowed) return rejectRateLimited(res, ipDecision.retryAfterSeconds);
+
+      const emailDecision = forgotEmailLimiter.check(`forgot:email:${emailKey}`);
+      if (!emailDecision.allowed) return rejectRateLimited(res, emailDecision.retryAfterSeconds);
+
+      const user = await findUserByEmail(deps.db, email);
+
+      if (user) {
+        const token = await createResetRequest(deps.db, user.id, null);
+        try {
+          await mailer.sendPasswordReset({ to: user.email, token });
+        } catch (error) {
+          // Un fallo del envío no puede cambiar la respuesta: sería un oráculo.
+          console.error("[auth] fallo al enviar el correo de recuperación:", error);
+        }
+      } else {
+        // Iguala el número de round-trips con la rama que sí encuentra cuenta.
+        await deps.db.query("select 1");
+      }
+
+      return res.status(202).json({ status: "accepted" });
+    }),
+  );
+
+  app.post(
+    "/auth/reset-password",
+    asyncHandler(async (req, res) => {
+      const parsed = resetPasswordSchema.safeParse(req.body);
+      if (!parsed.success) return res.status(400).json({ error: "invalid_request" });
+
+      const newHash = await hashPassword(parsed.data.new_password);
+      const result = await consumeResetToken(deps.db, parsed.data.token, newHash);
+
+      // Mismo 400 para token inexistente, expirado o ya usado.
+      if (!result.ok) return res.status(400).json({ error: "invalid_token" });
+
+      return res.status(204).end();
+    }),
+  );
+
+  if (devOutbox) {
+    app.get("/_dev/outbox", (_req, res) => {
+      res.status(200).json({ messages: devOutbox });
+    });
+  }
 
   app.use((_req, res) => res.status(404).json({ error: "not_found" }));
 

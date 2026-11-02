@@ -344,3 +344,54 @@ export async function consumeMfaChallenge(
   );
   return result.rows[0]?.user_id ?? null;
 }
+
+// ------------------------------------------- prevención de replay (TASK-006)
+
+/**
+ * Reclama un código TOTP para un usuario.
+ *
+ * Una sola sentencia: no existe ventana entre comprobar e insertar, así que dos
+ * peticiones simultáneas con el mismo código no pueden pasar ambas. Si la fila
+ * existe pero es más antigua que la ventana, el DO UPDATE la renueva y el código
+ * vuelve a ser válido.
+ *
+ * @returns true si es la primera vez dentro de la ventana; false si es replay.
+ */
+export async function claimTotpCode(
+  db: Queryable,
+  userId: string,
+  code: string,
+  windowSeconds: number = 60,
+  now: Date = new Date(),
+): Promise<boolean> {
+  const hash = createHash("sha256").update(code).digest("hex");
+  const step = Math.floor(now.getTime() / (TOTP_STEP_SECONDS * 1000));
+
+  const result = await db.query<{ user_id: string }>(
+    `insert into mfa_used_codes (user_id, code_hash, used_at, step)
+     values ($1, $2, $3, $4)
+     on conflict (user_id, code_hash) do update
+        set used_at = excluded.used_at,
+            step = excluded.step
+      where mfa_used_codes.used_at < ($3::timestamptz - ($5::int * interval '1 second'))
+     returning user_id`,
+    [userId, hash, now, step, windowSeconds],
+  );
+
+  return result.rows.length === 1;
+}
+
+/** Borra los códigos usados más antiguos que `olderThanSeconds`. */
+export async function cleanupUsedTotpCodes(
+  db: Queryable,
+  olderThanSeconds: number = 120,
+  now: Date = new Date(),
+): Promise<number> {
+  const result = await db.query<{ user_id: string }>(
+    `delete from mfa_used_codes
+      where used_at < ($1::timestamptz - ($2::int * interval '1 second'))
+      returning user_id`,
+    [now, olderThanSeconds],
+  );
+  return result.rows.length;
+}

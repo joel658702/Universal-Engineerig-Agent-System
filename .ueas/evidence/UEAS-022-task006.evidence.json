@@ -1,0 +1,113 @@
+{
+  "task_id": "TASK-006",
+  "agent": "BUILDER",
+  "requirement": "Impedir el replay de códigos TOTP dentro de su ventana de validez mediante un registro de códigos usados con reclamo atómico, aplicado al login y a la desactivación de MFA, con limpieza acotada.",
+  "risk": {
+    "level": "L3",
+    "justification": "Endurece la validación del segundo factor sin definir un mecanismo nuevo de identidad (F4=3). F6 corregido a 3: el radio es «todos los usuarios con MFA» y el motor mide alcance, no gravedad. Aprobado por el operador.",
+    "sensitive_data": true,
+    "critical_structures": true
+  },
+  "confirmation": {
+    "required": true,
+    "status": "granted",
+    "granted_by": "Operador humano, 2026-11-02: «Procede con: 006_mfa_used_codes… Arranca» (aprobación L3, una firma)"
+  },
+  "changes": [
+    { "path": "services/auth/migrations/006_mfa_used_codes.up.sql", "action": "create", "summary": "Tabla mfa_used_codes con PK (user_id, code_hash), used_at, step e índice de limpieza." },
+    { "path": "services/auth/migrations/006_mfa_used_codes.down.sql", "action": "create", "summary": "Reversión de la tabla." },
+    { "path": "services/auth/src/mfa.ts", "action": "modify", "summary": "claimTotpCode (INSERT ... ON CONFLICT DO UPDATE ... WHERE ... RETURNING) y cleanupUsedTotpCodes." },
+    { "path": "services/auth/src/app.ts", "action": "modify", "summary": "Anti-replay aplicado en /auth/mfa/verify y en /auth/mfa/disable." },
+    { "path": "services/auth/scripts/cleanup-mfa-used-codes.mjs", "action": "create", "summary": "Limpieza de códigos con más de 120 s, con --dry-run y función exportada." },
+    { "path": "services/auth/test/mfa-replay.test.ts", "action": "create", "summary": "5 tests: replay bloqueado, expiración, usuarios independientes, limpieza e integración con disable." },
+    { "path": "services/auth/test/mfa.test.ts", "action": "modify", "summary": "Tres flujos con código válido se marcan como dependientes de PostgreSQL real, porque atraviesan el reclamo atómico." },
+    { "path": "TECH_DEBT.md", "action": "modify", "summary": "Partida 16 marcada como RESUELTA." },
+    { "path": ".ueas/evidence/UEAS-022-task006.evidence.json", "action": "create", "summary": "Evidencia de esta tarea." }
+  ],
+  "verification": [
+    {
+      "check": "Migración 006 aplica y revierte",
+      "method": "command",
+      "command": "node scripts/migrate.mjs up",
+      "result": "pass",
+      "output_excerpt": "aplicada: 006_mfa_used_codes.up.sql"
+    },
+    {
+      "check": "Replay bloqueado: el mismo código no vale dos veces dentro de la ventana",
+      "method": "test_suite",
+      "command": "test/mfa-replay.test.ts :: 'replay bloqueado...'",
+      "result": "pass",
+      "output_excerpt": "primer canje 200; segundo con el mismo código 400 {error:'mfa_verification_failed'}"
+    },
+    {
+      "check": "El código vuelve a valer pasada la ventana (camino ON CONFLICT DO UPDATE)",
+      "method": "test_suite",
+      "command": "test/mfa-replay.test.ts :: 'el código vuelve a valer pasada la ventana'",
+      "result": "pass",
+      "output_excerpt": "se envejece la fila a 2 minutos sin borrarla → el mismo código vuelve a dar 200"
+    },
+    {
+      "check": "Usuarios distintos pueden usar el mismo código",
+      "method": "test_suite",
+      "command": "test/mfa-replay.test.ts :: 'usuarios distintos...'",
+      "result": "pass",
+      "output_excerpt": "claim para A true · claim para B true · segundo claim para A false"
+    },
+    {
+      "check": "La limpieza borra solo los códigos antiguos",
+      "method": "test_suite",
+      "command": "test/mfa-replay.test.ts :: 'la limpieza borra solo los códigos antiguos'",
+      "result": "pass",
+      "output_excerpt": "deleted 1; queda 1 fila reciente"
+    },
+    {
+      "check": "Integración: un código usado en el login no sirve para desactivar MFA",
+      "method": "test_suite",
+      "command": "test/mfa-replay.test.ts :: 'integración: un código usado en el login...'",
+      "result": "pass",
+      "output_excerpt": "disable con el mismo código → 400; un login posterior sigue pidiendo mfa_required"
+    },
+    {
+      "check": "Suite completa contra PostgreSQL 16 real",
+      "method": "test_suite",
+      "command": "TEST_DATABASE_URL=... node --test --test-isolation=none \"test/**/*.test.ts\"",
+      "result": "pass",
+      "output_excerpt": "tests 100 · pass 100 · fail 0 · skipped 0"
+    },
+    {
+      "check": "Suite completa con pg-mem",
+      "method": "test_suite",
+      "command": "node --test --test-isolation=none \"test/**/*.test.ts\"",
+      "result": "pass",
+      "output_excerpt": "tests 100 · pass 79 · fail 0 · skipped 21 (21 dependen de ON CONFLICT ... WHERE o de ROLLBACK real)"
+    },
+    {
+      "check": "Drill F7 con la migración 006",
+      "method": "test_suite",
+      "command": "node scripts/f7-drill.mjs",
+      "result": "pass",
+      "output_excerpt": "5 comprobaciones, 0 fallos"
+    },
+    {
+      "check": "Ejecución del script de limpieza como proceso CLI",
+      "method": "command",
+      "result": "not_run",
+      "not_run_reason": "El sandbox bloquea spawn con stdio canalizado (EPERM). La función está probada por importación; el envoltorio CLI y su --dry-run no se han ejecutado como proceso."
+    }
+  ],
+  "evidence_completeness": "partial",
+  "open_risks": [
+    "El script de limpieza no se ha ejecutado como proceso; su programación (cron/worker) tampoco existe, así que la tabla solo se purga si alguien lo lanza.",
+    "La ventana de 60 s se mide con el reloj del servidor de base de datos; un desajuste entre app y BD no afecta al reclamo, pero sí a la expectativa del usuario.",
+    "pg-mem ya no puede ejecutar los flujos de MFA con código válido: 21 tests quedan omitidos sin PostgreSQL real, así que la cobertura del camino feliz de MFA depende del motor real.",
+    "El hash SHA-256 de un código de 6 dígitos es reversible por fuerza bruta (10^6). No se presenta como protección: lo que protege es la ventana y la existencia de la fila.",
+    "Sin límite de filas por usuario: un cliente que reintente mucho dentro de la ventana puede insertar varios códigos distintos (uno por intento válido), aunque el WHERE acota la validez."
+  ],
+  "rollback": "migrate down de 006; revertir mfa.ts y app.ts; eliminar el script y su test. Sin la tabla, el comportamiento vuelve al de TASK-004.",
+  "self_approved": false,
+  "approvals": {
+    "verifier": null,
+    "decision": "pending",
+    "notes": "L3 aprobado por el operador con una firma, según RISK_ENGINE §6."
+  }
+}

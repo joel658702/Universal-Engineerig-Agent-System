@@ -20,7 +20,7 @@
 | 13 | **Sin CI hasta este commit** | Nada impedía fusionar sin ejecutar las verificaciones | Resuelto en `.github/workflows/ci.yml` (pendiente de primera ejecución real) |
 | 14 | **Sin rama protegida ni revisión obligatoria** | El CI avisa, pero un `push --force` a `main` lo esquiva | Al incorporar el segundo colaborador |
 | 15 | ~~**`migrate up` no es idempotente** — no existe tabla `schema_migrations`~~ · **RESUELTO** en TASK-002 | Era: re-ejecutar `up` rompía con `heap_create_with_catalog`. Ahora hay libro con checksum, transacción por migración, lock entre procesos y `baseline` | Evidencia: UEAS-018 |
-| 16 | **Un código TOTP es reutilizable dentro de su ventana (±1 paso ≈ 90 s)** | Un código interceptado (phishing en tiempo real, proxy) puede canjearse una segunda vez dentro de la ventana. No se registra el último `step` usado | Antes de exponer MFA a usuarios reales |
+| 16 | ~~**Un código TOTP es reutilizable dentro de su ventana (±1 paso ≈ 90 s)**~~ · **RESUELTO** en TASK-006 | Era: un código interceptado podía canjearse dos veces. Ahora `mfa_used_codes` con reclamo atómico (`ON CONFLICT … DO UPDATE … WHERE`) en login y en disable, más script de limpieza | Evidencia: UEAS-022 |
 | 17 | ~~**Sin procedimiento de rotación ni recuperación de `MFA_MASTER_KEY`**~~ · **RESUELTO** en TASK-005 | Era: perder la clave dejaba a todos los usuarios con MFA fuera, sin runbook. Ahora hay rotación transaccional, `recover-mfa-loss` con confirmación y auditoría, y `docs/mfa-key-management.md` | Evidencia: UEAS-021 |
 
 ## Cómo se paga

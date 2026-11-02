@@ -26,6 +26,11 @@ import { makeMemDb, makeTokenConfig } from "./support/fixtures.ts";
 const PASSWORD = "correct-horse-battery-staple";
 const EMAIL = "mfa@example.com";
 
+// Los flujos con código VÁLIDO pasan por claimTotpCode (ON CONFLICT ... WHERE),
+// que pg-mem no soporta desde TASK-006.
+const USING_REAL_PG = Boolean(process.env["TEST_DATABASE_URL"]);
+const SKIP_NO_PG = USING_REAL_PG ? false : "requiere PostgreSQL real: anti-replay con ON CONFLICT ... WHERE";
+
 type Ctx = { baseUrl: string; mfaKey: Buffer };
 
 async function withApp<T>(fn: (ctx: Ctx) => Promise<T>, extra: Partial<AppDeps> = {}): Promise<T> {
@@ -121,7 +126,7 @@ test("los códigos de recuperación son únicos y su hash es estable", () => {
 
 // --------------------------------------------------------- flujo completo
 
-test("flujo completo: setup → verify-setup → login en dos fases → canje", async () => {
+test("flujo completo: setup → verify-setup → login en dos fases → canje", { skip: SKIP_NO_PG }, async () => {
   await withApp(async ({ baseUrl }) => {
     const session = await registerAndLogin(baseUrl);
     const { secret, backupCodes } = await enableMfa(baseUrl, session.access_token);
@@ -146,7 +151,7 @@ test("flujo completo: setup → verify-setup → login en dos fases → canje", 
   });
 });
 
-test("el mfa_token es de un solo uso", async () => {
+test("el mfa_token es de un solo uso", { skip: SKIP_NO_PG }, async () => {
   await withApp(async ({ baseUrl }) => {
     const session = await registerAndLogin(baseUrl);
     const { secret } = await enableMfa(baseUrl, session.access_token);
@@ -262,7 +267,7 @@ test("rate limit de códigos de recuperación: el cuarto intento responde 429", 
 
 // -------------------------------------------------------------- desactivar
 
-test("desactivar exige contraseña y código válido, y revoca las sesiones", async () => {
+test("desactivar exige contraseña y código válido, y revoca las sesiones", { skip: SKIP_NO_PG }, async () => {
   await withApp(async ({ baseUrl }) => {
     const session = await registerAndLogin(baseUrl);
     const { secret, accessToken } = await enableMfa(baseUrl, session.access_token);

@@ -14,6 +14,7 @@ import { createNullMailer, type DevMailer, type Mailer } from "./mailer.ts";
 import {
   buildOtpAuthUri,
   burnTotpTime,
+  claimTotpCode,
   confirmMfaSecret,
   consumeBackupCode,
   consumeMfaChallenge,
@@ -647,6 +648,14 @@ export function createApp(deps: AppDeps): Express {
         return res.status(400).json({ error: "mfa_verification_failed" });
       }
 
+      // Anti-replay: el mismo código no puede canjearse dos veces dentro de la
+      // ventana, aunque el reto sea nuevo.
+      const fresh = await claimTotpCode(deps.db, user.id, parsed.data.code);
+      if (!fresh) {
+        burnTotpTime(parsed.data.code);
+        return res.status(400).json({ error: "mfa_verification_failed" });
+      }
+
       return issueSession(user, req, res);
     }),
   );
@@ -723,6 +732,14 @@ export function createApp(deps: AppDeps): Express {
       }
 
       if (!verifyTotp(secret, parsed.data.code)) {
+        return res.status(400).json({ error: "mfa_verification_failed" });
+      }
+
+      // Mismo anti-replay que en el login: un código ya usado no sirve para
+      // desactivar el segundo factor.
+      const fresh = await claimTotpCode(deps.db, user.id, parsed.data.code);
+      if (!fresh) {
+        burnTotpTime(parsed.data.code);
         return res.status(400).json({ error: "mfa_verification_failed" });
       }
 

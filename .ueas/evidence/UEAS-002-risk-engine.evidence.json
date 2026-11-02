@@ -1,0 +1,76 @@
+{
+  "task_id": "UEAS-002-RISK-ENGINE",
+  "agent": "BUILDER",
+  "requirement": "Crear .ueas/RISK_ENGINE.md (v0.2) como motor de clasificación de riesgo, resolviendo el solape L3/L4 de CORE_RULES §4 en la frontera de autenticación, tras constatar que la tarea TASK-001 lo citaba sin que existiera.",
+  "risk": {
+    "level": "L2",
+    "justification": "Documento normativo dentro de .ueas/, sin código ejecutable, sin datos sensibles ni producción; autorizado explícitamente por el humano.",
+    "sensitive_data": false,
+    "critical_structures": true
+  },
+  "confirmation": {
+    "required": true,
+    "status": "granted",
+    "granted_by": "Operador humano, selección explícita: «Autorizo crear RISK_ENGINE.md (v0.2)»"
+  },
+  "changes": [
+    { "path": ".ueas/RISK_ENGINE.md", "action": "create", "summary": "Motor de riesgo: 6 factores con max(), frontera auth/cripto, override humano, aprobadores, evidencia mínima, ejemplos y registro risk_id." },
+    { "path": ".ueas/RISK_ENGINE.md", "action": "modify", "summary": "Corrección de F1 (material explotable, no mera manipulación de credenciales) y F2 (solo cambios desplegables), tras aplicar el motor y detectar que la rama L3 era inalcanzable y que el ejemplo de documentación no cuadraba." },
+    { "path": ".ueas/CHANGELOG.md", "action": "modify", "summary": "Entrada 0.2 BORRADOR con motivo, autorizante, derivados y pendiente de autorización del cross-ref en CORE_RULES." },
+    { "path": ".ueas/README.md", "action": "modify", "summary": "Fila del índice para RISK_ENGINE.md." },
+    { "path": ".ueas/evidence/UEAS-002-risk-engine.evidence.json", "action": "create", "summary": "Evidencia de esta tarea." }
+  ],
+  "verification": [
+    {
+      "check": "RISK_ENGINE.md existe con contenido y las secciones clave",
+      "method": "command",
+      "command": "Get-ChildItem .ueas\\RISK_ENGINE.md ; Select-String .ueas\\RISK_ENGINE.md -Pattern '^## '",
+      "result": "pass",
+      "output_excerpt": "7,15 KB / 134 lineas; 10 secciones (## 1. Por qué existe ... ## 10. Cambios respecto a v0.1)"
+    },
+    {
+      "check": "La ambigüedad L3/L4 queda resuelta con una pregunta única y regla de desconocimiento → L4",
+      "method": "read_back",
+      "command": "Get-Content .ueas\\RISK_ENGINE.md -TotalCount 80",
+      "result": "pass",
+      "output_excerpt": "«¿Este cambio define cómo se verifica la identidad, o solo consume un mecanismo ya definido y aprobado?» + «Si el repositorio no permite determinar cuál es el caso, se clasifica L4»"
+    },
+    {
+      "check": "El CHANGELOG registra la v0.2 como BORRADOR con autorizante humano",
+      "method": "read_back",
+      "command": "Get-Content .ueas\\CHANGELOG.md -TotalCount 12",
+      "result": "pass",
+      "output_excerpt": "## [0.2] — 2026-11-01 — BORRADOR (pendiente de aprobación) / Autorizado por: operador humano / Aprobado por: — (pendiente)"
+    },
+    {
+      "check": "Los 7 ejemplos de RISK_ENGINE §8 son consistentes: max(F) == nivel declarado",
+      "method": "test_suite",
+      "command": "python %TEMP%\\ueas_risk_check.py   (script no versionado)",
+      "result": "pass",
+      "output_excerpt": "7/7 SI — RESULTADO: TODOS_CONSISTENTES, exit=0. Antes de la corrección: 'Documentación' daba max=2 vs L1 declarado y F1=4 hacía inalcanzable L3."
+    },
+    {
+      "check": "Los cambios no alteran el esquema de evidencia (regresión de la suite)",
+      "method": "test_suite",
+      "command": "python %TEMP%\\ueas_suite.py   (no versionado)",
+      "result": "pass",
+      "output_excerpt": "RESULTADO: TODOS_OK"
+    },
+    {
+      "check": "Este sobre valida contra EVIDENCE_SCHEMA.json",
+      "method": "schema_validation",
+      "command": "python .ueas\\tools\\validate_evidence.py .ueas\\evidence\\UEAS-002-risk-engine.evidence.json",
+      "result": "pass",
+      "output_excerpt": "PASS"
+    }
+  ],
+  "evidence_completeness": "complete",
+  "open_risks": [
+    "v0.2 queda en BORRADOR: no rige hasta aprobación humana registrada.",
+    "El cross-ref de una línea en CORE_RULES.md §4 no se hizo: excede la autorización recibida.",
+    "TASK-001 sigue bloqueada: el nivel calculado depende de un hecho declarado de forma contradictoria (greenfield vs. auth existente)."
+  ],
+  "rollback": "Eliminar .ueas/RISK_ENGINE.md, su fila en README.md y la entrada 0.2 del CHANGELOG.",
+  "self_approved": false,
+  "approvals": { "verifier": null, "decision": "pending", "notes": null }
+}

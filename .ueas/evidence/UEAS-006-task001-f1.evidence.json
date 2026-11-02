@@ -1,0 +1,107 @@
+{
+  "task_id": "TASK-001-F1",
+  "agent": "BUILDER",
+  "requirement": "Ejecutar la fase 1 de TASK-001: dependencias instaladas y auditadas, migraciones users/refresh_tokens con reversión, y verificación ejecutable del esquema.",
+  "risk": {
+    "level": "L4",
+    "justification": "Fase de una tarea L4 (autenticación). Ejecutada bajo dispensa DE-002; el nivel no cambia.",
+    "sensitive_data": true,
+    "critical_structures": true
+  },
+  "confirmation": {
+    "required": true,
+    "status": "granted",
+    "granted_by": "DE-001 (plan) + DE-002 (dispensa de doble firma)"
+  },
+  "changes": [
+    { "path": "services/auth/package.json", "action": "modify", "summary": "vitest eliminado (no se usa: la suite es node:test), zod subido a ^4.6.7 por CVE, dependencias de producción resueltas." },
+    { "path": "services/auth/package-lock.json", "action": "create", "summary": "Árbol de dependencias bloqueado (88 paquetes de producción)." },
+    { "path": "services/auth/migrations/001_users.up.sql", "action": "create", "summary": "Tabla users con UUID, unicidad de email case-insensitive por índice funcional y CHECKs." },
+    { "path": "services/auth/migrations/001_users.down.sql", "action": "create", "summary": "Reversión de users." },
+    { "path": "services/auth/migrations/002_refresh_tokens.up.sql", "action": "create", "summary": "refresh_tokens con FK a users, familia, hash único, índices parcial y de purga, CHECK de expiración." },
+    { "path": "services/auth/migrations/002_refresh_tokens.down.sql", "action": "create", "summary": "Reversión de refresh_tokens." },
+    { "path": "services/auth/scripts/migrate.mjs", "action": "create", "summary": "Runner up/down agnóstico de driver (pg en real, pg-mem en tests); CLI por DATABASE_URL." },
+    { "path": "services/auth/test/migrations.test.ts", "action": "create", "summary": "5 tests: creación, unicidad case-insensitive, FK, CHECK de expiración, rollback reversible." },
+    { "path": "services/auth/README.md", "action": "modify", "summary": "Fases actualizadas, comandos reales, bloqueos del entorno documentados." },
+    { "path": ".gitignore", "action": "modify", "summary": "Añadidos .npm-cache/, .pgdata/, .probe*/." },
+    { "path": ".ueas/evidence/UEAS-006-task001-f1.evidence.json", "action": "create", "summary": "Evidencia de esta tarea." }
+  ],
+  "verification": [
+    {
+      "check": "Dependencias instaladas pese al bloqueo de subprocesos",
+      "method": "command",
+      "command": "npm install --omit=dev --ignore-scripts --cache <workspace>/.npm-cache",
+      "result": "pass",
+      "output_excerpt": "added 88 packages, and audited 89 packages in 11s"
+    },
+    {
+      "check": "Los cinco módulos de producción cargan tras la instalación",
+      "method": "command",
+      "command": "node -e \"import('jose'|'pg'|'zod'|'express'|'argon2')\"",
+      "result": "pass",
+      "output_excerpt": "OK jose · OK pg · OK zod · OK express · OK argon2  (argon2 con binario precompilado, sin compilar)"
+    },
+    {
+      "check": "npm audit sin vulnerabilidades High/Critical (condición de DE-001 §2)",
+      "method": "test_suite",
+      "command": "npm audit --cache <workspace>/.npm-cache --json",
+      "result": "pass",
+      "output_excerpt": "{\"info\":0,\"low\":0,\"moderate\":0,\"high\":0,\"critical\":0,\"total\":0}  — antes de corregir: 2 critical + 2 high (cinco por vitest, una por zod<4.6.6)"
+    },
+    {
+      "check": "Suite completa del servicio: HTTP + migraciones",
+      "method": "test_suite",
+      "command": "node --test --test-isolation=none \"test/**/*.test.ts\"",
+      "result": "pass",
+      "output_excerpt": "tests 8 · pass 8 · fail 0 · duration_ms 771 · exit=0"
+    },
+    {
+      "check": "Reversibilidad de las migraciones (rollback elimina tablas en orden inverso)",
+      "method": "test_suite",
+      "command": "test/migrations.test.ts :: 'el rollback elimina las tablas en orden inverso'",
+      "result": "pass",
+      "output_excerpt": "reverted = [002_refresh_tokens.down.sql, 001_users.down.sql]; select from users tras el rollback falla como se espera"
+    },
+    {
+      "check": "PostgreSQL real vía docker",
+      "method": "command",
+      "command": "docker info",
+      "result": "fail",
+      "output_excerpt": "permission denied while trying to connect to the docker API at npipe:////./pipe/dockerDesktopLinuxEngine"
+    },
+    {
+      "check": "PostgreSQL embebido sin docker (binarios del paquete @embedded-postgres)",
+      "method": "command",
+      "command": "initdb -D .pgdata ; postgres -D .pgdata -p 55432",
+      "result": "fail",
+      "output_excerpt": "initdb OK; pg_ctl: 'no se pudo crear el token restringido: código de error 87'; postgres.exe: 'could not bind IPv4 address \"127.0.0.1\": Permission denied' → FATAL: could not create any TCP/IP sockets"
+    },
+    {
+      "check": "Ejecución de las migraciones contra PostgreSQL real",
+      "method": "command",
+      "result": "not_run",
+      "not_run_reason": "Ningún servidor PostgreSQL puede abrir socket en este sandbox. Las migraciones se validaron contra pg-mem, un emulador en memoria."
+    },
+    {
+      "check": "Este sobre valida y respeta R1/R5",
+      "method": "schema_validation",
+      "command": "python .ueas/scripts/verify_evidence_format.py",
+      "result": "pass",
+      "output_excerpt": "PASS en los 7 sobres, 0 con fallos"
+    }
+  ],
+  "evidence_completeness": "partial",
+  "open_risks": [
+    "Las migraciones NO se han ejecutado contra PostgreSQL real: pg-mem no garantiza índices parciales, semántica de CHECK ni defaults UUID idénticos.",
+    "Sin PostgreSQL no hay tests de integración para las fases 2–5 (registro, login, refresh, rotación).",
+    "El índice único funcional sobre lower(email) se validó en el emulador; en PostgreSQL conviene confirmar el plan de ejecución.",
+    "Dispensa DE-002 vigente: L4 con una sola firma y sin revisión de seguridad independiente."
+  ],
+  "rollback": "Eliminar services/auth/migrations, scripts/migrate.mjs y test/migrations.test.ts; revertir package.json al estado previo; npm ci para restaurar el árbol. No hay datos que deshacer: nunca hubo base de datos.",
+  "self_approved": false,
+  "approvals": {
+    "verifier": null,
+    "decision": "pending",
+    "notes": "Ejecutado bajo dispensa DE-002. Sobre en partial: la validación contra PostgreSQL real no pudo ejecutarse."
+  }
+}

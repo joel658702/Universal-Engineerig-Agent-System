@@ -1,0 +1,117 @@
+{
+  "task_id": "TASK-001-F6",
+  "agent": "BUILDER",
+  "requirement": "Añadir hardening configurable con AUTH_MODE=bearer|cookie|both: CORS con lista blanca, cookies httpOnly/Secure/SameSite=Strict, CSRF por doble envío, CSP y headers de seguridad.",
+  "risk": {
+    "level": "L4",
+    "justification": "Fase de una tarea L4 (autenticación) bajo la excepción EX-001; decide cómo viaja la credencial y qué puede ejecutarse en el navegador.",
+    "sensitive_data": true,
+    "critical_structures": true
+  },
+  "confirmation": {
+    "required": true,
+    "status": "granted",
+    "granted_by": "Operador humano, 2026-11-01: «F6 (hardening) aprobado con los siguientes requisitos…»"
+  },
+  "changes": [
+    { "path": "services/auth/src/hardening.ts", "action": "create", "summary": "Headers, CORS con lista blanca, parseo de cookies, cookies de auth, doble envío CSRF con timingSafeEqual y CSP." },
+    { "path": "services/auth/src/app.ts", "action": "modify", "summary": "Modo configurable, resolución de credencial (header > cookie), CSRF solo por cookie, emisión y limpieza de cookies en login/refresh/logout." },
+    { "path": "services/auth/test/hardening.test.ts", "action": "create", "summary": "8 tests: headers en 3 modos, CORS bloqueado/permitido, atributos de cookie, CSRF, prioridad del header y refresh por cookie." },
+    { "path": "services/auth/.env.example", "action": "modify", "summary": "AUTH_MODE y CORS_ALLOWED_ORIGINS sin valores." },
+    { "path": "services/auth/README.md", "action": "modify", "summary": "Documentación de los tres modos, flujo CSRF y headers." },
+    { "path": ".ueas/evidence/UEAS-012-task001-f6.evidence.json", "action": "create", "summary": "Evidencia de esta tarea." }
+  ],
+  "verification": [
+    {
+      "check": "Suite completa sin regresiones",
+      "method": "test_suite",
+      "command": "node --test --test-isolation=none \"test/**/*.test.ts\"",
+      "result": "pass",
+      "output_excerpt": "tests 52 · pass 52 · fail 0 · exit=0  (8 nuevos de hardening)"
+    },
+    {
+      "check": "Headers de seguridad en los tres modos, sin X-Powered-By",
+      "method": "test_suite",
+      "command": "test/hardening.test.ts :: 'headers de seguridad presentes en los tres modos'",
+      "result": "pass",
+      "output_excerpt": "nosniff · DENY · X-XSS-Protection=0 · HSTS max-age=31536000 · x-powered-by ausente, para bearer, cookie y both"
+    },
+    {
+      "check": "CORS bloquea origen no listado y permite el listado",
+      "method": "test_suite",
+      "command": "test/hardening.test.ts :: 'bearer: CORS bloquea un origen fuera de la lista blanca'",
+      "result": "pass",
+      "output_excerpt": "Origin https://evil.example → sin Access-Control-Allow-Origin; https://app.example → cabecera presente con ese valor"
+    },
+    {
+      "check": "Modo bearer no emite cookies y exige Authorization",
+      "method": "test_suite",
+      "command": "test/hardening.test.ts :: 'bearer: sin Authorization responde 401 y no emite cookies'",
+      "result": "pass",
+      "output_excerpt": "login 200 con 0 cabeceras Set-Cookie; /auth/me sin header → 401"
+    },
+    {
+      "check": "Cookies con HttpOnly, Secure y SameSite=Strict; CSRF legible por JS",
+      "method": "test_suite",
+      "command": "test/hardening.test.ts :: 'cookie: fija cookies httpOnly, Secure y SameSite=Strict, y CSP'",
+      "result": "pass",
+      "output_excerpt": "access_token y refresh_token con HttpOnly+Secure+SameSite=Strict; csrf_token sin HttpOnly y con SameSite=Strict"
+    },
+    {
+      "check": "CSP estricta presente en modo cookie",
+      "method": "test_suite",
+      "command": "test/hardening.test.ts :: mismo caso",
+      "result": "pass",
+      "output_excerpt": "Content-Security-Policy contiene default-src 'self' y script-src 'self'"
+    },
+    {
+      "check": "POST sin CSRF en modo cookie → 403; con CSRF válido pasa a evaluar credencial",
+      "method": "test_suite",
+      "command": "test/hardening.test.ts :: 'cookie: /auth/me funciona con cookie y exige CSRF solo en POST'",
+      "result": "pass",
+      "output_excerpt": "sin x-csrf-token → 403 csrf_failed; con token → 401 invalid_credentials (llegó al handler)"
+    },
+    {
+      "check": "Modo both: el Authorization gana sobre una cookie inválida",
+      "method": "test_suite",
+      "command": "test/hardening.test.ts :: 'both: el Authorization tiene prioridad sobre la cookie'",
+      "result": "pass",
+      "output_excerpt": "Bearer válido + cookie access_token=basura → 200"
+    },
+    {
+      "check": "Modo both: CSRF solo cuando se usa cookie",
+      "method": "test_suite",
+      "command": "test/hardening.test.ts :: 'both: CSRF solo se valida cuando se usa la cookie'",
+      "result": "pass",
+      "output_excerpt": "por encabezado sin CSRF → 401; por cookie sin CSRF → 403"
+    },
+    {
+      "check": "Refresh por cookie exige CSRF y rota",
+      "method": "test_suite",
+      "command": "test/hardening.test.ts :: 'both: el refresh por cookie exige CSRF y rota'",
+      "result": "pass",
+      "output_excerpt": "sin CSRF → 403; con CSRF → 200 y Set-Cookie nuevo"
+    },
+    {
+      "check": "HSTS aplicado realmente por el cliente",
+      "method": "command",
+      "result": "not_run",
+      "not_run_reason": "Los tests corren sobre HTTP en 127.0.0.1; HSTS solo lo respetan navegadores sobre HTTPS. Se verifica la cabecera, no su efecto."
+    }
+  ],
+  "evidence_completeness": "complete",
+  "open_risks": [
+    "En modo cookie, Secure impide usar el flujo en desarrollo sin TLS: hay que servir por HTTPS o usar bearer en local.",
+    "La CSP permite 'unsafe-inline' en style-src (requisito del operador): debilita la protección contra exfiltración por CSS.",
+    "CSRF por doble envío depende de que el frontend copie el token; un XSS lo puede leer (aunque un XSS ya compromete la sesión).",
+    "El modo both amplía superficie: conviene fijar uno por despliegue y reservar both para migraciones.",
+    "Sin PostgreSQL real, estas comprobaciones no cubren el comportamiento detrás de un proxy TLS."
+  ],
+  "rollback": "Eliminar src/hardening.ts y test/hardening.test.ts; revertir app.ts a bearer fijo. Sin datos que deshacer.",
+  "self_approved": false,
+  "approvals": {
+    "verifier": null,
+    "decision": "pending",
+    "notes": "Ejecutado bajo EX-001. Completo para lo declarado; el efecto real de HSTS queda fuera del alcance del entorno."
+  }
+}

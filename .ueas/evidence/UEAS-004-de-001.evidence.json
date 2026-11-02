@@ -1,0 +1,94 @@
+{
+  "task_id": "UEAS-004-DE-001",
+  "agent": "BUILDER",
+  "requirement": "Registrar la decisión humana DE-001 sobre TASK-001 y materializar los artefactos que su mensaje declaraba ya existentes (scripts de verificación y cross-ref en CORE_RULES), verificando cada afirmación contra el disco.",
+  "risk": {
+    "level": "L2",
+    "justification": "Artefactos de gobernanza y verificación dentro de .ueas/, sin código de producto ni datos; autorizados por el mensaje del operador.",
+    "sensitive_data": false,
+    "critical_structures": true
+  },
+  "confirmation": {
+    "required": true,
+    "status": "granted",
+    "granted_by": "Operador humano, mensaje «Aprobación de Plan, Threat Model y Resolución de Bloqueos R1/R2» (2026-11-01)"
+  },
+  "changes": [
+    { "path": ".ueas/scripts/verify_evidence_format.py", "action": "create", "summary": "Valida todos los sobres de evidencia y aplica R1 (un BUILDER no escribe decision=approved) y R5 (self_approved false)." },
+    { "path": ".ueas/scripts/verify_security_policies.py", "action": "create", "summary": "Escaneo de secretos hardcodeados, cobertura de .env en .gitignore y ausencia de .env reales." },
+    { "path": ".ueas/CORE_RULES.md", "action": "modify", "summary": "Cross-ref obligatorio a RISK_ENGINE.md en §4 (el mensaje lo daba por hecho; no existía)." },
+    { "path": ".ueas/README.md", "action": "modify", "summary": "Filas para scripts/ y decisions/ en el índice." },
+    { "path": ".ueas/decisions/2026-11-01-DE-001-TASK-001.md", "action": "create", "summary": "Registro de la decisión humana con anexo de verificación de sus 5 afirmaciones." },
+    { "path": ".ueas/CHANGELOG.md", "action": "modify", "summary": "Entrada [0.3] con lo añadido y las discrepancias detectadas." },
+    { "path": ".ueas/evidence/UEAS-004-de-001.evidence.json", "action": "create", "summary": "Evidencia de esta tarea." }
+  ],
+  "verification": [
+    {
+      "check": "Antes de actuar: .ueas/scripts/ no existía, aunque el mensaje lo daba por creado",
+      "method": "command",
+      "command": "Test-Path '.ueas\\scripts'",
+      "result": "pass",
+      "output_excerpt": "False  — y Get-ChildItem .ueas\\scripts no devolvió ningún archivo"
+    },
+    {
+      "check": "Antes de actuar: CORE_RULES.md no mencionaba RISK_ENGINE ni tenía §4.1",
+      "method": "command",
+      "command": "Select-String .ueas\\CORE_RULES.md -Pattern 'RISK_ENGINE'",
+      "result": "pass",
+      "output_excerpt": "NINGUNA mencion de RISK_ENGINE en CORE_RULES.md / única sección: '## 4. Clasificación de riesgo' (sin 4.1)"
+    },
+    {
+      "check": "CODEOWNERS y services/auth no existen (la regla R1 no puede aplicarse todavía)",
+      "method": "command",
+      "command": "Test-Path 'services\\auth' ; Test-Path 'CODEOWNERS' ; Test-Path '.github\\CODEOWNERS'",
+      "result": "pass",
+      "output_excerpt": "services/auth False · CODEOWNERS False · .github/CODEOWNERS False"
+    },
+    {
+      "check": "Tras el cambio: el cross-ref a RISK_ENGINE.md existe en CORE_RULES §4",
+      "method": "command",
+      "command": "Select-String .ueas\\CORE_RULES.md -Pattern 'RISK_ENGINE'",
+      "result": "pass",
+      "output_excerpt": "«Para la clasificación de riesgos y la determinación de autorizaciones requeridas antes de la ejecución, consultar obligatoriamente: RISK_ENGINE.md»"
+    },
+    {
+      "check": "verify_evidence_format.py: los 4 sobres previos validan y respetan R1/R5",
+      "method": "test_suite",
+      "command": "python .ueas\\scripts\\verify_evidence_format.py",
+      "result": "pass",
+      "output_excerpt": "PASS UEAS-000-scaffold / PASS UEAS-001-approval / PASS UEAS-002-risk-engine / PASS UEAS-003-engine-approval → '4 sobres · 0 con fallos', exit=0"
+    },
+    {
+      "check": "verify_security_policies.py: detecta un hallazgo real (falta .gitignore)",
+      "method": "test_suite",
+      "command": "python .ueas\\scripts\\verify_security_policies.py",
+      "result": "fail",
+      "output_excerpt": "archivos de código escaneados: 0 / hallazgos: 1 / - .gitignore: no existe (no hay forma de garantizar que .env no se versione) / exit=1"
+    },
+    {
+      "check": ".sh no son ejecutables en este entorno: justifica la sustitución por .py",
+      "method": "command",
+      "command": "bash -c \"echo bash-ok\" ; \"C:\\Program Files\\Git\\bin\\bash.exe\" -c \"echo git-bash-ok\"",
+      "result": "pass",
+      "output_excerpt": "WSL: 'Acceso denegado ... Bash/E_ACCESSDENIED' exit=1 · Git Bash: 'fatal error - couldn't create signal pipe, Win32 error 5' — sandbox bloquea named pipes"
+    },
+    {
+      "check": "Este sobre valida contra EVIDENCE_SCHEMA.json",
+      "method": "schema_validation",
+      "command": "python .ueas\\tools\\validate_evidence.py .ueas\\evidence\\UEAS-004-de-001.evidence.json",
+      "result": "pass",
+      "output_excerpt": "PASS"
+    }
+  ],
+  "evidence_completeness": "complete",
+  "open_risks": [
+    "No existe .gitignore ni .env.example: riesgo real de versionar secretos cuando se cree el proyecto (hallazgo del escáner).",
+    "Sustitución .sh → .py pendiente de visto bueno explícito; los .sh no son ejecutables aquí.",
+    "CODEOWNERS no creado: no hay repositorio git ni existía la ruta; la regla R1 por rol aún no puede aplicarse técnicamente.",
+    "TASK-001 sigue en L4 con 1 de 2 firmas: la segunda es una designación de rol, no una revisión ejercida.",
+    "El bloque de evidencia recibido con timestamp 2026-11-02T10:00:00Z (futuro) y campos fuera de esquema no se ingirió."
+  ],
+  "rollback": "Eliminar .ueas/scripts/, .ueas/decisions/ y la entrada [0.3] del CHANGELOG; retirar el cross-ref de CORE_RULES §4.",
+  "self_approved": false,
+  "approvals": { "verifier": null, "decision": "pending", "notes": null }
+}

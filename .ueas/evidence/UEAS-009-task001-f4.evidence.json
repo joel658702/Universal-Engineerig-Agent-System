@@ -1,0 +1,110 @@
+{
+  "task_id": "TASK-001-F4",
+  "agent": "BUILDER",
+  "requirement": "Implementar rotación de refresh tokens con familias, detección de reutilización mediante UPDATE atómico, revocación de familia y endpoint de logout, verificado contra pg-mem.",
+  "risk": {
+    "level": "L4",
+    "justification": "Fase de núcleo de autenticación bajo la excepción EX-001 (DE-002); una rotación defectuosa permite sesiones indefinidas tras un robo.",
+    "sensitive_data": true,
+    "critical_structures": true
+  },
+  "confirmation": {
+    "required": true,
+    "status": "granted",
+    "granted_by": "Operador humano, 2026-11-01: «Sobre F4 … APROBADA contra pg-mem» (respaldado por EX-001/DE-002)"
+  },
+  "changes": [
+    { "path": "services/auth/src/refresh.ts", "action": "create", "summary": "Rotación con reclamación atómica, detección de reutilización y revocación de familia; logout idempotente sin oráculo." },
+    { "path": "services/auth/src/users.ts", "action": "modify", "summary": "Repositorio de refresh: buscar por hash, marcar rotado (UPDATE condicional) y revocar familia." },
+    { "path": "services/auth/src/app.ts", "action": "modify", "summary": "POST /auth/refresh y POST /auth/logout con validación zod y mapeo de errores." },
+    { "path": "services/auth/test/refresh.test.ts", "action": "create", "summary": "9 tests de rotación, familia, reutilización, logout, expiración y cuenta deshabilitada." },
+    { "path": ".ueas/proposals/TASK-001-F4.proposal.json", "action": "modify", "summary": "Estado PROPUESTA → APROBADA con granted_by." },
+    { "path": "services/auth/README.md", "action": "modify", "summary": "Fase 4 marcada como hecha (con pg-mem)." },
+    { "path": ".ueas/evidence/UEAS-009-task001-f4.evidence.json", "action": "create", "summary": "Evidencia de esta tarea." }
+  ],
+  "verification": [
+    {
+      "check": "Suite completa del servicio en verde",
+      "method": "test_suite",
+      "command": "node --test --test-isolation=none \"test/**/*.test.ts\"",
+      "result": "pass",
+      "output_excerpt": "tests 29 · pass 29 · fail 0 · exit=0  (12 auth + 9 refresh + 3 health + 5 migraciones)"
+    },
+    {
+      "check": "La rotación emite un par nuevo dentro de la misma familia",
+      "method": "test_suite",
+      "command": "test/refresh.test.ts :: 'refresh rota el token y devuelve un par nuevo de la misma familia'",
+      "result": "pass",
+      "output_excerpt": "refresh distinto del presentado; un solo family_id con count=2"
+    },
+    {
+      "check": "El token rotado deja de valer y el nuevo funciona",
+      "method": "test_suite",
+      "command": "test/refresh.test.ts :: 'el token rotado deja de servir; el nuevo sí funciona'",
+      "result": "pass",
+      "output_excerpt": "nuevo → 200; presentar el original ya rotado → 401"
+    },
+    {
+      "check": "Reutilización de un token rotado revoca la familia completa",
+      "method": "test_suite",
+      "command": "test/refresh.test.ts :: 'reutilizar un token rotado revoca la familia completa'",
+      "result": "pass",
+      "output_excerpt": "reuso → 401; select count(*) where revoked_at is null → 0; el token legítimo más reciente también deja de servir"
+    },
+    {
+      "check": "Logout revoca la sesión y no actúa como oráculo",
+      "method": "test_suite",
+      "command": "test/refresh.test.ts :: logout (2 casos)",
+      "result": "pass",
+      "output_excerpt": "logout válido → 204 y refresh posterior 401; token desconocido → 204 igualmente"
+    },
+    {
+      "check": "Refresh expirado y refresh desconocido responden 401",
+      "method": "test_suite",
+      "command": "test/refresh.test.ts :: expirado / desconocido",
+      "result": "pass",
+      "output_excerpt": "expirado → 401 (el CHECK expires_at > issued_at obligó a desplazar ambas fechas); desconocido → 401 sin crear filas"
+    },
+    {
+      "check": "Cuenta deshabilitada no puede rotar (403)",
+      "method": "test_suite",
+      "command": "test/refresh.test.ts :: 'usuario deshabilitado no puede rotar y recibe 403'",
+      "result": "pass",
+      "output_excerpt": "disabled_at = now() → 403 account_disabled"
+    },
+    {
+      "check": "El access token emitido por refresh sirve en /auth/me",
+      "method": "test_suite",
+      "command": "test/refresh.test.ts :: 'el access token emitido por refresh sirve en /auth/me'",
+      "result": "pass",
+      "output_excerpt": "200 con el correo del usuario"
+    },
+    {
+      "check": "Auditoría de dependencias sin High/Critical",
+      "method": "test_suite",
+      "command": "npm audit --cache <workspace>/.npm-cache --json",
+      "result": "pass",
+      "output_excerpt": "{\"info\":0,\"low\":0,\"moderate\":0,\"high\":0,\"critical\":0,\"total\":0}"
+    },
+    {
+      "check": "Detección de reutilización bajo concurrencia real",
+      "method": "command",
+      "result": "not_run",
+      "not_run_reason": "La carrera se resuelve con un UPDATE ... where rotated_at is null returning id, pero sin PostgreSQL real no se puede ejecutar en paralelo. pg-mem es monohilo."
+    }
+  ],
+  "evidence_completeness": "partial",
+  "open_risks": [
+    "La atomicidad de markRefreshRotated está diseñada para PostgreSQL pero no se ha probado con transacciones concurrentes reales.",
+    "El endpoint /auth/refresh no valida token_version: si se sube token_version, los refresh vivos siguen rotando hasta expirar (decisión consciente: la revocación global afecta a access tokens; los refresh se cortan con logout o deshabilitación).",
+    "Purga de tokens expirados no implementada (índice listo, sin job).",
+    "TASK-001 completo sigue en partial hasta el swap a PostgreSQL real."
+  ],
+  "rollback": "Eliminar src/refresh.ts y test/refresh.test.ts; retirar los dos endpoints de app.ts; revertir las funciones nuevas de users.ts. Los tokens emitidos no se borran: se revocan.",
+  "self_approved": false,
+  "approvals": {
+    "verifier": null,
+    "decision": "pending",
+    "notes": "Ejecutado bajo EX-001. Sobre en partial: la concurrencia real del UPDATE atómico queda sin probar."
+  }
+}

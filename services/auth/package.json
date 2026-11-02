@@ -1,0 +1,31 @@
+{
+  "name": "@ueas/auth-service",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Servicio de autenticación JWT (TASK-001, riesgo L4)",
+  "engines": {
+    "node": ">=22.6"
+  },
+  "scripts": {
+    "test": "node --test --test-isolation=none \"test/**/*.test.ts\"",
+    "typecheck": "tsc --noEmit",
+    "audit:ci": "npm audit --audit-level=high",
+    "migrate:up": "node scripts/migrate.mjs up",
+    "migrate:down": "node scripts/migrate.mjs down"
+  },
+  "dependencies": {
+    "argon2": "^0.41.1",
+    "express": "^4.21.2",
+    "jose": "^5.9.6",
+    "pg": "^8.13.1",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.21",
+    "@types/node": "^22.10.2",
+    "@types/pg": "^8.11.10",
+    "pg-mem": "^3.0.14",
+    "typescript": "^5.7.2"
+  }
+}

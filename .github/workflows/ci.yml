@@ -1,0 +1,80 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  auth-service:
+    name: Auth service · PostgreSQL 16
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: auth
+          POSTGRES_PASSWORD: password
+          POSTGRES_DB: auth
+        ports:
+          - "5432:5432"
+        options: >-
+          --health-cmd "pg_isready -U auth -d auth"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+    defaults:
+      run:
+        working-directory: services/auth
+    env:
+      DATABASE_URL: postgres://auth:password@127.0.0.1:5432/auth
+      TEST_DATABASE_URL: postgres://auth:password@127.0.0.1:5432/auth
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: services/auth/package-lock.json
+
+      - name: Instalar dependencias
+        run: npm ci
+
+      - name: Auditoría de dependencias (falla con High o Critical)
+        run: npm audit --audit-level=high
+
+      - name: Migraciones (up)
+        run: node scripts/migrate.mjs up
+
+      - name: Suite completa
+        # --test-concurrency=1: los tests comparten una base y reinician el esquema.
+        run: node --test --test-concurrency=1 "test/**/*.test.ts"
+
+      - name: Drill de rollback (F7)
+        run: node scripts/f7-drill.mjs
+
+      - name: Migraciones (down)
+        run: node scripts/migrate.mjs down
+
+  governance:
+    name: Corpus y evidencias
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Selftest de los contratos
+        run: python .ueas/scripts/verify_evidence_format.py --selftest
+
+      - name: Validación de artefactos (evidencia, propuestas, veredictos)
+        run: python .ueas/scripts/verify_evidence_format.py
+
+      - name: Políticas de seguridad
+        run: python .ueas/scripts/verify_security_policies.py

@@ -1,0 +1,100 @@
+{
+  "task_id": "TASK-001-F0",
+  "agent": "BUILDER",
+  "requirement": "Registrar la dispensa de doble firma (DE-002) y ejecutar la fase 0 de TASK-001: bootstrap del servicio de autenticación en services/auth/ con un esqueleto HTTP verificable y suite propia.",
+  "risk": {
+    "level": "L4",
+    "justification": "Fase 0 de una tarea L4 (autenticación). Ejecutada bajo dispensa humana de segunda firma (DE-002); el nivel no baja por la dispensa.",
+    "sensitive_data": false,
+    "critical_structures": true
+  },
+  "confirmation": {
+    "required": true,
+    "status": "granted",
+    "granted_by": "Operador humano: DE-001 (plan aprobado) + DE-002 (dispensa de doble firma, opción «2»)"
+  },
+  "changes": [
+    { "path": ".gitignore", "action": "create", "summary": "Cubre node_modules, .env*, *.pem, *.key, dist, coverage, __pycache__." },
+    { "path": "services/auth/package.json", "action": "create", "summary": "Metadatos, scripts (test sin dependencias, typecheck, migrate, audit) y dependencias objetivo." },
+    { "path": "services/auth/tsconfig.json", "action": "create", "summary": "ES2023, NodeNext, strict, noUncheckedIndexedAccess, allowImportingTsExtensions." },
+    { "path": "services/auth/.env.example", "action": "create", "summary": "Variables de entorno sin valores, incluidos secretos." },
+    { "path": "services/auth/docker-compose.yml", "action": "create", "summary": "PostgreSQL 16-alpine con healthcheck y volumen; exige POSTGRES_PASSWORD." },
+    { "path": "services/auth/src/main.ts", "action": "create", "summary": "Bootstrap HTTP con /health y 404, sin dependencias externas." },
+    { "path": "services/auth/test/health.test.ts", "action": "create", "summary": "3 tests con node:test nativo (200 en /health, 404 en ruta desconocida, 404 en verbo no permitido)." },
+    { "path": "services/auth/README.md", "action": "create", "summary": "Estado por fase, comandos, bloqueos del entorno y decisiones de diseño fijadas." },
+    { "path": ".ueas/decisions/2026-11-01-DE-002-task001-waiver.md", "action": "create", "summary": "Dispensa de doble firma con riesgo residual aceptado y controles L4 mantenidos." },
+    { "path": ".ueas/CHANGELOG.md", "action": "modify", "summary": "Nota de DE-002 en la entrada [0.3]." },
+    { "path": ".ueas/evidence/UEAS-005-task001-f0.evidence.json", "action": "create", "summary": "Evidencia de esta tarea." }
+  ],
+  "verification": [
+    {
+      "check": "Suite de fase 0 en verde con el comando declarado en package.json",
+      "method": "test_suite",
+      "command": "node --test --test-isolation=none \"test/**/*.test.ts\"",
+      "result": "pass",
+      "output_excerpt": "3 tests · pass 3 · fail 0 · duration_ms 240 · exit=0 — incluye GET /health 200 y dos 404"
+    },
+    {
+      "check": "package.json y tsconfig.json parsean como JSON válido",
+      "method": "command",
+      "command": "Get-Content <archivo> -Raw | ConvertFrom-Json",
+      "result": "pass",
+      "output_excerpt": "OK services/auth/package.json · OK services/auth/tsconfig.json"
+    },
+    {
+      "check": "Políticas de seguridad: sin hallazgos tras crear .gitignore (antes había 1)",
+      "method": "test_suite",
+      "command": "python .ueas\\scripts\\verify_security_policies.py",
+      "result": "pass",
+      "output_excerpt": "archivos de código escaneados: 5 / hallazgos: 0 / exit=0  (previamente: «.gitignore: no existe»)"
+    },
+    {
+      "check": "El runner de tests por defecto NO es viable aquí (subprocesos bloqueados)",
+      "method": "command",
+      "command": "node --test test/",
+      "result": "fail",
+      "output_excerpt": "Error: spawn EPERM (errno -4048) al lanzar el archivo de test en un subproceso; de ahí --test-isolation=none"
+    },
+    {
+      "check": "Instalación de dependencias: imposible sin red",
+      "method": "command",
+      "command": "npm install --prefix <temp> --no-save ms",
+      "result": "fail",
+      "output_excerpt": "npm error code EPERM · path C:\\Users\\joe\\AppData\\Local\\npm-cache\\_cacache\\tmp\\*** · FetchError al obtener registry.npmjs.org"
+    },
+    {
+      "check": "PostgreSQL local vía docker: imposible (daemon sin permisos)",
+      "method": "command",
+      "command": "docker info",
+      "result": "fail",
+      "output_excerpt": "permission denied while trying to connect to the docker API at npipe:////./pipe/dockerDesktopLinuxEngine; exit=1"
+    },
+    {
+      "check": "Versiones exactas de las dependencias resueltas contra el registry",
+      "method": "command",
+      "result": "not_run",
+      "not_run_reason": "Sin acceso a registry.npmjs.org: las versiones del package.json son rangos razonables pero NO verificados contra el índice real."
+    },
+    {
+      "check": "Este sobre valida y respeta R1/R5",
+      "method": "schema_validation",
+      "command": "python .ueas\\scripts\\verify_evidence_format.py",
+      "result": "pass",
+      "output_excerpt": "PASS en los 6 sobres, 0 con fallos"
+    }
+  ],
+  "evidence_completeness": "partial",
+  "open_risks": [
+    "Fases 1–7 no ejecutables en este entorno: sin npm (EPERM) no hay argon2/jose/pg; sin docker no hay PostgreSQL.",
+    "Versiones de dependencias no verificadas contra el registry: los rangos del package.json son una propuesta.",
+    "Dispensa DE-002: L4 ejecutado con una sola firma y sin revisión de seguridad independiente (riesgo residual aceptado, no mitigado).",
+    "El código de autenticación (fases 2+) no debe escribirse sin poder ejecutar su suite: sería entrega sin evidencia."
+  ],
+  "rollback": "Eliminar services/auth/, .gitignore y la decisión DE-002; revertir la nota del CHANGELOG. Nada de esto toca datos ni producción.",
+  "self_approved": false,
+  "approvals": {
+    "verifier": null,
+    "decision": "pending",
+    "notes": "Ejecutado bajo dispensa DE-002 (una firma). El sobre queda en partial: dos comprobaciones fallaron por límites del entorno y una no pudo ejecutarse."
+  }
+}

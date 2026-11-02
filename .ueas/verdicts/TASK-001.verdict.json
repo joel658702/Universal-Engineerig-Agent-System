@@ -1,0 +1,46 @@
+{
+  "task_id": "TASK-001",
+  "verifier": "Lead Architect / Human Approver (rol declarado; identidad nominal no aportada)",
+  "decision": "approved",
+  "checks_reproduced": [
+    {
+      "check": "Suite completa contra PostgreSQL 16",
+      "expected": "55/55 en verde, incluidos los 2 tests de ROLLBACK antes omitidos",
+      "observed": "tests 55 · pass 55 · fail 0 · skipped 0 · duration_ms 14465",
+      "match": true
+    },
+    {
+      "check": "Migraciones up y down",
+      "expected": "aplican y revierten sin error",
+      "observed": "revertida: 002_refresh_tokens.down.sql / 001_users.down.sql ; aplicada: 001_users.up.sql / 002_refresh_tokens.up.sql",
+      "match": true
+    },
+    {
+      "check": "F7(a) — migración fallida no deja esquema a medias",
+      "expected": "la sentencia válida de una migración fallida se revierte",
+      "observed": "migrationThrew: true, probeSurvived: false",
+      "match": true
+    },
+    {
+      "check": "F7(c) — concurrencia real",
+      "expected": "registro simultáneo: un 201 y un 409 · refresh simultáneo: un 200 y un 401",
+      "observed": "statuses [201,409] · statuses [200,401] con tokens_vivos: 0",
+      "match": true
+    },
+    {
+      "check": "F7(d) — integridad transaccional",
+      "expected": "ROLLBACK no persiste el insert; el fallo del hash no deja sesiones revocadas",
+      "observed": "filas: 0; test «si falla el cambio de hash, las sesiones NO quedan revocadas» en verde",
+      "match": true
+    }
+  ],
+  "unverified_claims": [],
+  "reasons": [
+    "Cierre declarado por el operador en DE-003 y revisado en DE-003-bis",
+    "Las cinco comprobaciones declaradas se reprodujeron contra PostgreSQL 16 real, con salida registrada en UEAS-015",
+    "La restricción del binario nativo se rodeó con contenedor, no se resolvió; queda declarado así"
+  ],
+  "decided_at": "2026-11-02T09:30:51-05:00",
+  "self_verdict": false,
+  "notes": "Transcripción de una decisión humana: la aprobación es del operador, no del agente (R1). Los riesgos residuales que no cubre este veredicto están en TECH_DEBT.md y en DE-003-bis §5."
+}

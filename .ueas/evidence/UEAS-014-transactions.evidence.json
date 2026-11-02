@@ -1,0 +1,81 @@
+{
+  "task_id": "UEAS-014",
+  "agent": "BUILDER",
+  "requirement": "Completar las dos piezas pendientes de TASK-001: (b) permitir que la suite corra contra PostgreSQL real vía TEST_DATABASE_URL y (c) envolver el cambio de contraseña en una transacción, con pruebas.",
+  "risk": {
+    "level": "L4",
+    "justification": "Modificación del núcleo de autenticación bajo la excepción EX-001; la transacción corrige una ventana de estado inconsistente en el cambio de credenciales.",
+    "sensitive_data": true,
+    "critical_structures": true
+  },
+  "confirmation": {
+    "required": true,
+    "status": "granted",
+    "granted_by": "Operador humano, 2026-11-01: «Autorizo todo (a + b + c) y el escalado» y «Proceder con las ~40 líneas pendientes»"
+  },
+  "changes": [
+    { "path": "services/auth/src/transaction.ts", "action": "create", "summary": "runInTransaction con BEGIN/COMMIT/ROLLBACK en SQL; si el ROLLBACK falla, propaga el error original." },
+    { "path": "services/auth/src/app.ts", "action": "modify", "summary": "El cambio de contraseña ejecuta revocación + nuevo hash dentro de la transacción." },
+    { "path": "services/auth/test/support/fixtures.ts", "action": "modify", "summary": "Si existe TEST_DATABASE_URL usa PostgreSQL real (conexión única compartida, esquema reiniciado por test); si no, pg-mem." },
+    { "path": "services/auth/test/transactions.test.ts", "action": "create", "summary": "3 tests: COMMIT persiste, ROLLBACK deshace, y fallo del hash no deja sesiones revocadas (los dos últimos solo con PostgreSQL real)." },
+    { "path": "services/auth/README.md", "action": "modify", "summary": "Documentados el cambio transaccional y cómo correr la suite contra PostgreSQL real." },
+    { "path": ".ueas/evidence/UEAS-014-transactions.evidence.json", "action": "create", "summary": "Evidencia de esta tarea." }
+  ],
+  "verification": [
+    {
+      "check": "Suite completa con pg-mem sin regresiones",
+      "method": "test_suite",
+      "command": "node --test --test-isolation=none \"test/**/*.test.ts\"",
+      "result": "pass",
+      "output_excerpt": "tests 55 · pass 53 · fail 0 · skipped 2 · exit=0"
+    },
+    {
+      "check": "COMMIT persiste el cambio",
+      "method": "test_suite",
+      "command": "test/transactions.test.ts :: 'la transacción hace COMMIT y el cambio persiste'",
+      "result": "pass",
+      "output_excerpt": "insert dentro de runInTransaction → count(*) = 1"
+    },
+    {
+      "check": "pg-mem ignora ROLLBACK (hallazgo, no suposición)",
+      "method": "test_suite",
+      "command": "test/transactions.test.ts :: 'la transacción hace ROLLBACK y no deja rastro' (sin TEST_DATABASE_URL)",
+      "result": "fail",
+      "output_excerpt": "AssertionError: el insert debe haberse deshecho — 1 !== 0. BEGIN/COMMIT se aceptan; ROLLBACK no revierte."
+    },
+    {
+      "check": "La suite no finge: las pruebas que necesitan rollback real quedan omitidas con motivo",
+      "method": "test_suite",
+      "command": "node --test (con y sin TEST_DATABASE_URL)",
+      "result": "pass",
+      "output_excerpt": "skipped 2, ambos con motivo 'requiere PostgreSQL real: pg-mem ignora ROLLBACK'"
+    },
+    {
+      "check": "El fallo del UPDATE de contraseña no deja sesiones revocadas (rollback real)",
+      "method": "test_suite",
+      "command": "test/transactions.test.ts :: 'si falla el cambio de hash…'",
+      "result": "not_run",
+      "not_run_reason": "Depende de ROLLBACK real, que pg-mem no implementa. El test existe y se ejecutará en cuanto haya TEST_DATABASE_URL."
+    },
+    {
+      "check": "Camino con PostgreSQL real de fixtures.ts",
+      "method": "command",
+      "result": "not_run",
+      "not_run_reason": "Sin servidor PostgreSQL posible en este entorno (bind denegado incluso con danger-full-access, ver UEAS-013). El código del camino real no se ha ejecutado nunca."
+    }
+  ],
+  "evidence_completeness": "partial",
+  "open_risks": [
+    "La transacción añadida NO está verificada: su comportamiento depende de ROLLBACK, que solo PostgreSQL implementa aquí.",
+    "El camino TEST_DATABASE_URL de fixtures.ts nunca se ha ejecutado: puede contener errores de conexión o de reinicio de esquema.",
+    "pg-mem acepta BEGIN/COMMIT sin aplicar ROLLBACK: cualquier otro test que dependa de transacciones daría un falso positivo.",
+    "TASK-001 sigue partial: sin motor real no hay swap ni F7."
+  ],
+  "rollback": "Eliminar src/transaction.ts y test/transactions.test.ts; revertir app.ts al par de llamadas secuenciales y fixtures.ts a pg-mem puro.",
+  "self_approved": false,
+  "approvals": {
+    "verifier": null,
+    "decision": "pending",
+    "notes": "Dos tests quedan omitidos y dos comprobaciones not_run: sería deshonesto declarar verificada una transacción con un emulador que ignora ROLLBACK."
+  }
+}

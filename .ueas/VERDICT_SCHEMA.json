@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ueas.local/schemas/verdict.schema.json",
+  "title": "UEAS Verdict Envelope",
+  "description": "Veredicto del VERIFIER sobre una entrega. Es el único artefacto que puede mover una tarea de ENTREGADA a VERIFICADA. Nunca lo escribe el autor (R1).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "task_id",
+    "verifier",
+    "decision",
+    "checks_reproduced",
+    "reasons",
+    "decided_at",
+    "self_verdict"
+  ],
+  "properties": {
+    "task_id": { "type": "string", "minLength": 1 },
+    "verifier": {
+      "type": "string",
+      "minLength": 3,
+      "description": "Identidad del verificador. Debe ser distinta del agente autor: una cadena como 'BUILDER' se rechaza en la validación semántica."
+    },
+    "decision": {
+      "type": "string",
+      "enum": ["approved", "rejected", "changes_requested"]
+    },
+    "checks_reproduced": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["check", "expected", "observed", "match"],
+        "properties": {
+          "check": { "type": "string", "minLength": 5 },
+          "expected": { "type": "string", "minLength": 1 },
+          "observed": { "type": "string", "minLength": 1 },
+          "match": { "type": "boolean" }
+        }
+      }
+    },
+    "unverified_claims": {
+      "type": "array",
+      "description": "Afirmaciones de la entrega que el verificador NO pudo reproducir.",
+      "items": { "type": "string", "minLength": 5 }
+    },
+    "reasons": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 5 }
+    },
+    "decided_at": { "type": "string", "format": "date-time" },
+    "self_verdict": {
+      "const": false,
+      "description": "Constante false. Un verificador no emite veredicto sobre su propio trabajo (R1)."
+    },
+    "notes": { "type": ["string", "null"] }
+  }
+}

@@ -1,0 +1,60 @@
+{
+  "task_id": "UEAS-003-ENGINE-APPROVAL",
+  "agent": "BUILDER",
+  "requirement": "Registrar la aprobación humana de RISK_ENGINE.md v0.2 («Apruebo v0.2 tal cual») y actualizar su estado de BORRADOR a VIGENTE en el documento, el CHANGELOG y el índice.",
+  "risk": {
+    "level": "L2",
+    "justification": "Cambio de estado normativo dentro de .ueas/, sin código ni datos; autorizado explícitamente por el humano.",
+    "sensitive_data": false,
+    "critical_structures": true
+  },
+  "confirmation": {
+    "required": true,
+    "status": "granted",
+    "granted_by": "Operador humano, selección explícita: «Apruebo v0.2 tal cual» (2026-11-01)"
+  },
+  "changes": [
+    { "path": ".ueas/RISK_ENGINE.md", "action": "modify", "summary": "Cabecera BORRADOR→VIGENTE con aprobador y fecha; relación con CORE_RULES pasa de condicional a «prevalece desde su aprobación»." },
+    { "path": ".ueas/CHANGELOG.md", "action": "modify", "summary": "Entrada [0.2] de BORRADOR a VIGENTE, con aprobador y efecto declarado." },
+    { "path": ".ueas/README.md", "action": "modify", "summary": "Fila del índice: de «v0.2 BORRADOR» a «v0.2 vigente» con su relación de precedencia." },
+    { "path": ".ueas/evidence/UEAS-003-engine-approval.evidence.json", "action": "create", "summary": "Evidencia de esta tarea." }
+  ],
+  "verification": [
+    {
+      "check": "RISK_ENGINE.md declara VIGENTE con aprobador humano y fecha",
+      "method": "command",
+      "command": "Select-String .ueas\\RISK_ENGINE.md -Pattern 'Estado:|Aprobado por:|Vigente desde:'",
+      "result": "pass",
+      "output_excerpt": "**Estado:** VIGENTE — v0.2 aprobada. / **Aprobado por:** operador humano del workspace, 2026-11-01 («Apruebo v0.2 tal cual»). / **Vigente desde:** 2026-11-01."
+    },
+    {
+      "check": "El CHANGELOG refleja [0.2] como VIGENTE y no como borrador",
+      "method": "command",
+      "command": "Select-String .ueas\\CHANGELOG.md -Pattern '^## \\[0.2\\]'",
+      "result": "pass",
+      "output_excerpt": "## [0.2] — 2026-11-01 — VIGENTE (aprobado)"
+    },
+    {
+      "check": "El motor sigue siendo internamente consistente tras los cambios de cabecera",
+      "method": "test_suite",
+      "command": "python %TEMP%\\ueas_risk_check.py   (script no versionado)",
+      "result": "pass",
+      "output_excerpt": "RESULTADO: TODOS_CONSISTENTES (7/7), exit=0"
+    },
+    {
+      "check": "Este sobre valida contra EVIDENCE_SCHEMA.json",
+      "method": "schema_validation",
+      "command": "python .ueas\\tools\\validate_evidence.py .ueas\\evidence\\UEAS-003-engine-approval.evidence.json",
+      "result": "pass",
+      "output_excerpt": "PASS"
+    }
+  ],
+  "evidence_completeness": "complete",
+  "open_risks": [
+    "El cross-ref de una línea en CORE_RULES.md §4 sigue pendiente de autorización: la §4 no menciona RISK_ENGINE.md y un lector nuevo puede no llegar al motor.",
+    "TASK-001 (L4) sigue bloqueada: exige 2 aprobadores —uno de seguridad—, threat model y rollback probado antes de escribir código."
+  ],
+  "rollback": "Revertir la cabecera de RISK_ENGINE.md, la entrada [0.2] del CHANGELOG y la fila del README a su texto BORRADOR.",
+  "self_approved": false,
+  "approvals": { "verifier": null, "decision": "pending", "notes": null }
+}

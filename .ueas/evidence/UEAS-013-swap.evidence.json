@@ -1,0 +1,92 @@
+{
+  "task_id": "UEAS-013",
+  "agent": "BUILDER",
+  "requirement": "Intentar el swap a PostgreSQL real mediante arranque con escalado de permisos, siguiendo el plan UEAS-013 aprobado, y ejecutar F7 solo si el motor arranca.",
+  "risk": {
+    "level": "L4",
+    "justification": "Ejecución de una operación autorizada fuera del sandbox (danger-full-access) sobre una tarea L4 en curso, bajo la excepción EX-001.",
+    "sensitive_data": false,
+    "critical_structures": true
+  },
+  "confirmation": {
+    "required": true,
+    "status": "granted",
+    "granted_by": "Operador humano, 2026-11-01: «Autorizo todo (a + b + c) y el escalado», previa entrega del plan UEAS-013"
+  },
+  "changes": [
+    { "path": ".ueas/plans/UEAS-013-plan.md", "action": "create", "summary": "Plan con comandos exactos, permisos, expectativas, reversión y criterios de parada; incluye la sección de resultado." },
+    { "path": "services/auth/package.json", "action": "modify", "summary": "Alta temporal de @embedded-postgres/windows-x64 y baja tras el fallo: el archivo queda como estaba." },
+    { "path": ".ueas/evidence/UEAS-013-swap.evidence.json", "action": "create", "summary": "Evidencia de esta tarea." }
+  ],
+  "verification": [
+    {
+      "check": "Paso 1: binarios de PostgreSQL disponibles",
+      "method": "command",
+      "command": "npm install --save-dev --ignore-scripts @embedded-postgres/windows-x64@18.6.0-beta.19 ; postgres --version",
+      "result": "pass",
+      "output_excerpt": "added 1 package; postgres (PostgreSQL) 18.6"
+    },
+    {
+      "check": "Paso 2: initdb crea el clúster",
+      "method": "command",
+      "command": "initdb -D .pgdata -U auth --auth=trust --encoding=UTF8 --no-locale",
+      "result": "pass",
+      "output_excerpt": "initdb_exit=0; .pgdata\\PG_VERSION presente"
+    },
+    {
+      "check": "Paso 3: arranque con danger-full-access abre el puerto 55432",
+      "method": "command",
+      "command": "Start-Process postgres.exe -D .pgdata -p 55432 (sandbox_permissions: danger-full-access)",
+      "result": "fail",
+      "output_excerpt": "LOG: could not bind IPv4 address \"127.0.0.1\": Permission denied / WARNING: could not create listen socket / FATAL: could not create any TCP/IP sockets / database system is shut down; tcp_55432=False"
+    },
+    {
+      "check": "El escalado de permisos no alteró el estado del entorno",
+      "method": "command",
+      "command": "Get-Process postgres ; Test-NetConnection 127.0.0.1 -Port 55432",
+      "result": "pass",
+      "output_excerpt": "postgres.exe vivos: 0; tcp_55432=False"
+    },
+    {
+      "check": "Reversión completa: datos y dependencia eliminados",
+      "method": "command",
+      "command": "Remove-Item .pgdata ; npm uninstall @embedded-postgres/windows-x64",
+      "result": "pass",
+      "output_excerpt": ".pgdata existe: False; node_modules/@embedded-postgres: False; devDependencies sin el paquete (types, pg-mem, typescript)"
+    },
+    {
+      "check": "La suite sigue en verde tras revertir",
+      "method": "test_suite",
+      "command": "node --test --test-isolation=none \"test/**/*.test.ts\"",
+      "result": "pass",
+      "output_excerpt": "tests 52 · pass 52 · fail 0 · exit=0"
+    },
+    {
+      "check": "Paso 4–5: migraciones y suite contra PostgreSQL real",
+      "method": "command",
+      "result": "not_run",
+      "not_run_reason": "Parada por §6.1 del plan: sin socket no hay motor al que conectarse. Ejecutarlos habría sido simular evidencia."
+    },
+    {
+      "check": "F7 (rollback drill)",
+      "method": "command",
+      "result": "not_run",
+      "not_run_reason": "Condición del operador: F7 solo si PostgreSQL funciona. Sin motor real no hay transacciones ni concurrencia que probar."
+    }
+  ],
+  "evidence_completeness": "partial",
+  "open_risks": [
+    "El swap a PostgreSQL real sigue sin hacerse: TASK-001 no puede pasar a complete.",
+    "La denegación de bind() sobrevive a danger-full-access; apunta a una restricción del host o del empaquetado, fuera del alcance de este agente.",
+    "Sin motor real siguen sin probarse: transacciones, concurrencia del UPDATE atómico, índices bajo carga y ON DELETE CASCADE.",
+    "La secuencia de cambio de contraseña continúa sin transacción (riesgo abierto de UEAS-010).",
+    "El plan contemplaba adaptar fixtures.ts (b); no llegó a ejecutarse por la parada temprana, así que el archivo está intacto."
+  ],
+  "rollback": "Ya ejecutado: proceso detenido, .pgdata eliminado, dependencia desinstalada, suite verificada en 52/52. Los permisos de danger-full-access no persisten: se conceden por comando.",
+  "self_approved": false,
+  "approvals": {
+    "verifier": null,
+    "decision": "pending",
+    "notes": "Intento fallido y revertido. TASK-001 permanece en partial según la condición 5 del operador."
+  }
+}

@@ -1,0 +1,54 @@
+{
+  "task_id": "TASK-001-F4",
+  "agent": "BUILDER",
+  "requirement": "Implementar rotación de refresh tokens con familias y revocación ante reutilización, sobre la base de F2–F3.",
+  "risk": {
+    "level": "L4",
+    "justification": "Sigue siendo núcleo de autenticación (F4 del motor); la rotación mal implementada permite sesiones indefinidas tras un robo.",
+    "factors": { "F1": 4, "F2": 2, "F3": 2, "F4": 4, "F5": 1, "F6": 3 }
+  },
+  "confirmation": {
+    "required": true,
+    "status": "granted",
+    "granted_by": "Operador humano, 2026-11-01: «Sobre F4 … APROBADA contra pg-mem»"
+  },
+  "plan": [
+    {
+      "step": 1,
+      "description": "Rotar el refresh en cada uso: marcar rotated_at e insertar un token nuevo de la misma familia",
+      "verifiable_by": "test: el token viejo deja de servir tras un refresh"
+    },
+    {
+      "step": 2,
+      "description": "Detectar reutilización de un token ya rotado y revocar la familia completa",
+      "verifiable_by": "test: reusar un token rotado devuelve 401 y deja revoked_at en toda la familia"
+    },
+    {
+      "step": 3,
+      "description": "Endpoint POST /auth/logout que revoca la familia del refresh presentado",
+      "verifiable_by": "test: tras logout, el refresh devuelve 401"
+    },
+    {
+      "step": 4,
+      "description": "Purga de tokens expirados con criterio explícito",
+      "verifiable_by": "test: un token con expires_at pasado no se acepta"
+    }
+  ],
+  "files_expected": [
+    { "path": "services/auth/src/refresh.ts", "action": "create" },
+    { "path": "services/auth/src/app.ts", "action": "modify" },
+    { "path": "services/auth/test/refresh.test.ts", "action": "create" }
+  ],
+  "evidence_planned": [
+    "suite completa en verde con el conteo de tests",
+    "salida del test de reutilización mostrando la familia revocada",
+    "consulta a la tabla refresh_tokens verificando rotated_at y revoked_at"
+  ],
+  "rollback": "Revertir app.ts al estado de F3 y eliminar refresh.ts y su suite; los tokens emitidos no se borran, se marcan revocados.",
+  "stop_conditions": [
+    "Si el diseño exige cambiar el esquema de refresh_tokens más allá de lo previsto",
+    "Si la detección de reutilización no puede probarse con pg-mem y requiere PostgreSQL real"
+  ],
+  "state": "APROBADA",
+  "created_at": "2026-11-01T14:30:00-05:00"
+}

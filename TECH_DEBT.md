@@ -1,0 +1,27 @@
+# TECH DEBT — UEAS / services/auth
+
+> Última revisión: 2026-11-02 · Referencias: `DE-003-bis` §5 y los `open_risks` de `UEAS-005…015`.
+> Cada partida tiene un disparador: **cuándo deja de ser deuda y pasa a ser bloqueante**.
+
+| # | Deuda | Impacto | Disparador para pagarla |
+|---|---|---|---|
+| 1 | **Rate limiting en memoria del proceso** | Con N instancias el límite real es N × configurado; un atacante reparte la carga entre réplicas | Escalar horizontalmente, o desplegar tras un balanceador |
+| 2 | **Sin VERIFIER independiente** | Todas las evidencias están en `pending`; la aprobación es del operador, no de un par | Primera tarea con dos personas en el equipo |
+| 3 | **Sin MFA** | Una contraseña filtrada basta para entrar | Antes de exponer la cuenta a datos sensibles |
+| 4 | **Sin recuperación de contraseña** | Un usuario bloqueado no tiene salida autónoma | Antes del primer usuario real |
+| 5 | **Sin verificación de correo** | `email_verified_at` existe pero nadie lo escribe; se puede registrar el correo de otro | Antes de usar el correo como identificador de confianza |
+| 6 | **CSP con `style-src 'unsafe-inline'`** | Exfiltración por CSS posible si hay inyección de estilos | Cuando el frontend pueda usar `nonce` o `hash` |
+| 7 | **HSTS y cookies `Secure` sin probar sobre TLS** | Verificado el header, no el efecto; en producción podría romper sesiones o no aplicarse | Primera puesta en escena con HTTPS real |
+| 8 | **`pg-mem` acepta BEGIN/COMMIT pero ignora ROLLBACK** | Cualquier test de transacción añadido sin PostgreSQL real daría falso positivo | Cualquier test nuevo que dependa de atomicidad |
+| 9 | **Rangos de dependencias sin pin exacto** | Una versión menor puede cambiar comportamiento sin que el lock lo refleje si se regenera | Primera auditoría de suministro |
+| 10 | **Sin purga de refresh tokens expirados** | La tabla crece indefinidamente; el índice existe pero nadie lo usa | Primeros 100k tokens |
+| 11 | **`/auth/refresh` no revalida `token_version`** | Un cambio de contraseña corta las sesiones por la vía de `DE-002`, pero la rotación no comprueba la versión directamente | Si se añade revocación selectiva por dispositivo |
+| 12 | **Sin límite de tamaño en `refresh_tokens.user_agent`** | Un cliente puede enviar un `User-Agent` enorme por sesión | Primera revisión de tamaño de tabla |
+| 13 | **Sin CI hasta este commit** | Nada impedía fusionar sin ejecutar las verificaciones | Resuelto en `.github/workflows/ci.yml` (pendiente de primera ejecución real) |
+| 14 | **Sin rama protegida ni revisión obligatoria** | El CI avisa, pero un `push --force` a `main` lo esquiva | Al incorporar el segundo colaborador |
+
+## Cómo se paga
+
+1. Elegir una partida.
+2. Abrir propuesta con `PROPOSAL_SCHEMA.json` (nivel de riesgo por `RISK_ENGINE.md`).
+3. Implementar con su evidencia; actualizar esta tabla y `DE-003-bis` §5.

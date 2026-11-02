@@ -1,0 +1,78 @@
+{
+  "task_id": "UEAS-008-CONTRACTS",
+  "agent": "BUILDER",
+  "requirement": "Entregar los contratos de comunicación de la opción B: PROPOSAL_SCHEMA.json y VERDICT_SCHEMA.json, con casos de prueba en verify_evidence_format.py y una propuesta real bajo el contrato nuevo.",
+  "risk": {
+    "level": "L2",
+    "justification": "Artefactos de gobernanza y validación dentro de .ueas/, sin código de producto ni datos sensibles.",
+    "sensitive_data": false,
+    "critical_structures": true
+  },
+  "confirmation": {
+    "required": true,
+    "status": "granted",
+    "granted_by": "Operador humano, 2026-11-01 («Aprobado en los tres puntos», punto 4)"
+  },
+  "changes": [
+    { "path": ".ueas/PROPOSAL_SCHEMA.json", "action": "create", "summary": "Contrato del plan previo: riesgo con factores, pasos con verifiable_by, archivos, evidencia planeada, reversión, state." },
+    { "path": ".ueas/VERDICT_SCHEMA.json", "action": "create", "summary": "Contrato del veredicto: checks reproducidos con match, afirmaciones no reproducidas, motivos, self_verdict=false." },
+    { "path": ".ueas/scripts/verify_evidence_format.py", "action": "modify", "summary": "Valida los tres contratos, aplica invariantes R1/R3/R5 y añade --selftest con 6 casos." },
+    { "path": ".ueas/tools/validate_evidence.py", "action": "modify", "summary": "Soporte de minItems, requerido por VERDICT_SCHEMA." },
+    { "path": ".ueas/proposals/TASK-001-F4.proposal.json", "action": "create", "summary": "Propuesta real de la fase 4 (rotación de refresh) en estado PROPUESTA, pendiente de decisión humana." },
+    { "path": ".ueas/README.md", "action": "modify", "summary": "Filas de PROPOSAL_SCHEMA y VERDICT_SCHEMA." },
+    { "path": ".ueas/CHANGELOG.md", "action": "modify", "summary": "Entrada [1.2]." },
+    { "path": ".ueas/evidence/UEAS-008-contracts.evidence.json", "action": "create", "summary": "Evidencia de esta tarea." }
+  ],
+  "verification": [
+    {
+      "check": "Los dos esquemas parsean como JSON válido",
+      "method": "schema_validation",
+      "command": "Get-Content .ueas\\PROPOSAL_SCHEMA.json -Raw | ConvertFrom-Json",
+      "result": "pass",
+      "output_excerpt": "ambos parsean; PROPOSAL declara 10 campos requeridos, VERDICT 7"
+    },
+    {
+      "check": "Selftest de los contratos: 3 casos válidos y 3 inválidos se clasifican bien",
+      "method": "test_suite",
+      "command": "python .ueas/scripts/verify_evidence_format.py --selftest",
+      "result": "pass",
+      "output_excerpt": "OK proposal_valido=PASS · OK proposal_sin_plan=FAIL · OK proposal_L4_aprobada_sin_firmante=FAIL · OK verdict_valido=PASS · OK verdict_aprueba_con_fallo=FAIL · OK verdict_emitido_por_el_autor=FAIL → 6 casos · 0 fallos"
+    },
+    {
+      "check": "Las invariantes semánticas funcionan de verdad (no solo el esquema)",
+      "method": "test_suite",
+      "command": "python .ueas/scripts/verify_evidence_format.py --selftest",
+      "result": "pass",
+      "output_excerpt": "verdict_aprueba_con_fallo rechazado por R5 (match:false) y verdict_emitido_por_el_autor por R1 (verifier='BUILDER')"
+    },
+    {
+      "check": "Los artefactos reales del corpus validan contra su contrato",
+      "method": "test_suite",
+      "command": "python .ueas/scripts/verify_evidence_format.py",
+      "result": "pass",
+      "output_excerpt": "7 PASS de evidencia + (proposals y verdicts se incorporan al existir) · 0 con fallos"
+    },
+    {
+      "check": "La propuesta real TASK-001-F4 valida y queda en estado PROPUESTA",
+      "method": "schema_validation",
+      "command": "python .ueas/scripts/verify_evidence_format.py",
+      "result": "pass",
+      "output_excerpt": "PASS proposal/TASK-001-F4.proposal.json"
+    },
+    {
+      "check": "Este sobre valida y respeta R1/R5",
+      "method": "schema_validation",
+      "command": "python .ueas/scripts/verify_evidence_format.py",
+      "result": "pass",
+      "output_excerpt": "PASS evidence/UEAS-008-contracts.evidence.json"
+    }
+  ],
+  "evidence_completeness": "complete",
+  "open_risks": [
+    "PROPOSAL_SCHEMA no valida que los factores F1–F6 sean coherentes con el nivel declarado: el cálculo sigue siendo manual (candidato a comprobación semántica futura).",
+    "No existe aún un verificador real que produzca VERDICT_SCHEMA: los veredictos siguen siendo una capacidad sin usuario."
+  ],
+  "rollback": "Eliminar PROPOSAL_SCHEMA.json, VERDICT_SCHEMA.json y proposals/; revertir el script y el validador a su versión previa.",
+  "self_approved": false,
+  "approvals": { "verifier": null, "decision": "pending", "notes": null }
+}

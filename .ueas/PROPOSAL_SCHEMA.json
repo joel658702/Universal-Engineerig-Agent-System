@@ -1,0 +1,93 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ueas.local/schemas/proposal.schema.json",
+  "title": "UEAS Proposal Envelope",
+  "description": "Plan propuesto ANTES de ejecutar. Es el artefacto que el humano aprueba o rechaza; sin él, una ejecución no es conforme (CORE_RULES §5).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "task_id",
+    "agent",
+    "requirement",
+    "risk",
+    "confirmation",
+    "plan",
+    "files_expected",
+    "evidence_planned",
+    "rollback",
+    "state"
+  ],
+  "properties": {
+    "task_id": { "type": "string", "minLength": 1 },
+    "agent": { "type": "string", "enum": ["BUILDER", "ORCHESTRATOR"] },
+    "requirement": { "type": "string", "minLength": 10 },
+    "risk": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["level", "justification"],
+      "properties": {
+        "level": { "type": "string", "enum": ["L1", "L2", "L3", "L4"] },
+        "justification": { "type": "string", "minLength": 10 },
+        "factors": {
+          "type": "object",
+          "description": "Factores del RISK_ENGINE que sustentan el nivel (F1..F6).",
+          "additionalProperties": false,
+          "properties": {
+            "F1": { "type": "integer" },
+            "F2": { "type": "integer" },
+            "F3": { "type": "integer" },
+            "F4": { "type": "integer" },
+            "F5": { "type": "integer" },
+            "F6": { "type": "integer" }
+          }
+        }
+      }
+    },
+    "confirmation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["required", "status"],
+      "properties": {
+        "required": { "type": "boolean" },
+        "status": { "type": "string", "enum": ["not_required", "pending", "granted", "denied"] },
+        "granted_by": { "type": ["string", "null"] }
+      }
+    },
+    "plan": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["step", "description", "verifiable_by"],
+        "properties": {
+          "step": { "type": "integer" },
+          "description": { "type": "string", "minLength": 5 },
+          "verifiable_by": { "type": "string", "minLength": 5 }
+        }
+      }
+    },
+    "files_expected": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "action"],
+        "properties": {
+          "path": { "type": "string", "minLength": 1 },
+          "action": { "type": "string", "enum": ["create", "modify", "delete"] }
+        }
+      }
+    },
+    "evidence_planned": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 5 }
+    },
+    "rollback": { "type": "string", "minLength": 5 },
+    "stop_conditions": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 5 }
+    },
+    "state": { "type": "string", "enum": ["PROPUESTA", "APROBADA", "BLOQUEADA"] },
+    "created_at": { "type": "string", "format": "date-time" }
+  }
+}

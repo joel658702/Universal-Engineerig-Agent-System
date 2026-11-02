@@ -1,0 +1,119 @@
+{
+  "task_id": "UEAS-015",
+  "agent": "BUILDER",
+  "requirement": "Ejecutar el swap a PostgreSQL real (UEAS-013, segundo intento) y el drill de rollback F7: migraciones, suite completa, concurrencia, transacciones y reversión del entorno.",
+  "risk": {
+    "level": "L4",
+    "justification": "Cierre de una tarea L4 de autenticación bajo la excepción EX-001; incluye operaciones con el daemon de Docker fuera del sandbox.",
+    "sensitive_data": true,
+    "critical_structures": true
+  },
+  "confirmation": {
+    "required": true,
+    "status": "granted",
+    "granted_by": "Operador humano, 2026-11-01/02: «Autorizo todo (a + b + c) y el escalado» + «continua»"
+  },
+  "changes": [
+    { "path": "services/auth/scripts/migrate.mjs", "action": "modify", "summary": "BUG CORREGIDO: el guard de ejecución directa comparaba import.meta.url (%20) con argv[1] (espacio crudo); en rutas con espacios el CLI no hacía nada y salía con 0. Ahora usa pathToFileURL." },
+    { "path": "services/auth/src/main.ts", "action": "modify", "summary": "Mismo bug en el arranque del servidor; corregido con pathToFileURL." },
+    { "path": "services/auth/test/support/fixtures.ts", "action": "modify", "summary": "Pool con max:1 y allowExitOnIdle para que el proceso de test pueda terminar; con Client la suite quedaba colgada." },
+    { "path": "services/auth/scripts/f7-drill.mjs", "action": "create", "summary": "Drill F7 reutilizable: down/up, migración fallida, concurrencia de registro y refresh, BEGIN/ROLLBACK." },
+    { "path": "services/auth/README.md", "action": "modify", "summary": "Documentado el comando del drill." },
+    { "path": ".ueas/evidence/UEAS-015-pg-real-y-f7.evidence.json", "action": "create", "summary": "Evidencia de esta tarea." }
+  ],
+  "verification": [
+    {
+      "check": "Migraciones up y down sobre PostgreSQL 16 real",
+      "method": "command",
+      "command": "DATABASE_URL=... node scripts/migrate.mjs down ; up",
+      "result": "pass",
+      "output_excerpt": "revertida: 002_refresh_tokens.down.sql / revertida: 001_users.down.sql ; aplicada: 001_users.up.sql / aplicada: 002_refresh_tokens.up.sql"
+    },
+    {
+      "check": "Suite completa contra PostgreSQL real, sin omitidos",
+      "method": "test_suite",
+      "command": "TEST_DATABASE_URL=... node --test --test-isolation=none --test-concurrency=1 \"test/**/*.test.ts\"",
+      "result": "pass",
+      "output_excerpt": "tests 55 · pass 55 · fail 0 · skipped 0 · duration_ms 14465"
+    },
+    {
+      "check": "Los dos tests de rollback que pg-mem no podía ejecutar ahora corren y pasan",
+      "method": "test_suite",
+      "command": "test/transactions.test.ts (con PostgreSQL real)",
+      "result": "pass",
+      "output_excerpt": "✔ la transacción hace ROLLBACK y no deja rastro · ✔ si falla el cambio de hash, las sesiones NO quedan revocadas"
+    },
+    {
+      "check": "F7(b): down elimina las tablas y up las recrea",
+      "method": "test_suite",
+      "command": "node scripts/f7-drill.mjs",
+      "result": "pass",
+      "output_excerpt": "{\"check\":\"migrate down elimina ambas tablas y up las recrea\",\"pass\":true,\"detail\":{\"afterDown\":true,\"afterUp\":true}}"
+    },
+    {
+      "check": "F7(a): una migración fallida no deja esquema a medias",
+      "method": "test_suite",
+      "command": "node scripts/f7-drill.mjs",
+      "result": "pass",
+      "output_excerpt": "{\"check\":\"migración fallida revierte su propia sentencia válida\",\"pass\":true,\"detail\":{\"migrationThrew\":true,\"probeSurvived\":false}}"
+    },
+    {
+      "check": "F7(c): registro concurrente con el mismo correo",
+      "method": "test_suite",
+      "command": "node scripts/f7-drill.mjs",
+      "result": "pass",
+      "output_excerpt": "{\"check\":\"registro concurrente: exactamente un 201 y un 409\",\"pass\":true,\"detail\":{\"statuses\":[201,409]}}"
+    },
+    {
+      "check": "F7(c): refresh concurrente con el mismo token (carrera real del UPDATE atómico)",
+      "method": "test_suite",
+      "command": "node scripts/f7-drill.mjs",
+      "result": "pass",
+      "output_excerpt": "{\"check\":\"refresh concurrente: una rotación gana y la otra se detecta como reutilización\",\"pass\":true,\"detail\":{\"statuses\":[200,401],\"tokens_vivos\":0}}"
+    },
+    {
+      "check": "F7(d): BEGIN/ROLLBACK no persiste el insert",
+      "method": "test_suite",
+      "command": "node scripts/f7-drill.mjs",
+      "result": "pass",
+      "output_excerpt": "{\"check\":\"BEGIN/ROLLBACK no deja el insert\",\"pass\":true,\"detail\":{\"filas\":0}} — resumen: 5 comprobaciones, 0 fallos"
+    },
+    {
+      "check": "El bug del guard silencioso está realmente corregido",
+      "method": "command",
+      "command": "node scripts/migrate.mjs up (ruta con espacios)",
+      "result": "pass",
+      "output_excerpt": "antes: exit=0 sin salida y 0 tablas creadas; después: 'aplicada: 001_users.up.sql' y tablas users + refresh_tokens presentes"
+    },
+    {
+      "check": "Regresión con pg-mem tras todos los cambios",
+      "method": "test_suite",
+      "command": "node --test --test-isolation=none \"test/**/*.test.ts\" (sin TEST_DATABASE_URL)",
+      "result": "pass",
+      "output_excerpt": "tests 55 · pass 53 · fail 0 · skipped 2 (los de rollback, con motivo declarado)"
+    },
+    {
+      "check": "Entorno devuelto a su estado previo",
+      "method": "command",
+      "command": "docker compose down ; Test-NetConnection 127.0.0.1 -Port 5432",
+      "result": "pass",
+      "output_excerpt": "Container ueas-auth-postgres Removed; Network auth_default Removed; puerto_5432=False; logs temporales eliminados"
+    }
+  ],
+  "evidence_completeness": "complete",
+  "open_risks": [
+    "El rate limiting sigue en memoria del proceso: con varias instancias el límite se multiplica. Requiere Redis antes de escalar.",
+    "HSTS y el comportamiento de cookies Secure no se pueden verificar sin TLS real.",
+    "CSP conserva style-src 'unsafe-inline' por requisito; debilita la protección.",
+    "El repositorio no está bajo control de versiones (no hay git init): no existe historial ni posibilidad de revertir a un commit.",
+    "Sin CI: los comandos de verificación son manuales; nada impide fusionar sin ejecutarlos.",
+    "El drill de concurrencia usa dos peticiones; no sustituye una prueba de carga."
+  ],
+  "rollback": "docker compose down (hecho), borrar .pgreal.log/.pgtest.log (hecho), revertir los tres archivos modificados y eliminar f7-drill.mjs. Los datos del contenedor viven en el volumen auth_auth_pgdata, que puede eliminarse con docker volume rm.",
+  "self_approved": false,
+  "approvals": {
+    "verifier": null,
+    "decision": "pending",
+    "notes": "TASK-001 cumple la condición 6 del operador (todo verificado). El paso a 'complete' es una decisión humana registrada; el agente no la sanciona (R1)."
+  }
+}

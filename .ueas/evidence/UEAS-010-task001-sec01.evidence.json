@@ -1,0 +1,108 @@
+{
+  "task_id": "TASK-001-SEC-01",
+  "agent": "BUILDER",
+  "requirement": "Cerrar el hueco por el que un refresh token robado sobrevivía a un cambio de contraseña: al cambiar la clave se revocan todas las familias del usuario y sube token_version, con endpoint propio y tests.",
+  "risk": {
+    "level": "L4",
+    "justification": "Endurecimiento del núcleo de autenticación bajo la excepción EX-001 (DE-002); el fallo permitía sesiones persistentes tras una rotación de credenciales.",
+    "sensitive_data": true,
+    "critical_structures": true
+  },
+  "confirmation": {
+    "required": true,
+    "status": "granted",
+    "granted_by": "Operador humano, 2026-11-01: «Arranca en este orden: 1. Arreglar hueco de token_version (solución 1…)»"
+  },
+  "changes": [
+    { "path": "services/auth/src/authenticate.ts", "action": "create", "summary": "Comprobación de access token compartida por /auth/me y /auth/password: firma, typ, usuario, disabled_at y token_version." },
+    { "path": "services/auth/src/app.ts", "action": "modify", "summary": "Nuevo POST /auth/password (autenticado); /auth/me pasa a usar el helper compartido." },
+    { "path": "services/auth/src/users.ts", "action": "modify", "summary": "revokeAllUserRefreshTokens (todas las familias) y updatePasswordHash con token_version + 1 en una sola sentencia." },
+    { "path": "services/auth/test/password.test.ts", "action": "create", "summary": "8 tests del cambio de contraseña y de la revocación global de sesiones." },
+    { "path": "services/auth/README.md", "action": "modify", "summary": "Documentada la política de cambio de contraseña." },
+    { "path": ".ueas/evidence/UEAS-010-task001-sec01.evidence.json", "action": "create", "summary": "Evidencia de esta tarea." }
+  ],
+  "verification": [
+    {
+      "check": "Suite completa sin regresiones",
+      "method": "test_suite",
+      "command": "node --test --test-isolation=none \"test/**/*.test.ts\"",
+      "result": "pass",
+      "output_excerpt": "tests 37 · pass 37 · fail 0 · exit=0  (8 nuevos de contraseña)"
+    },
+    {
+      "check": "Un refresh emitido antes del cambio deja de valer después",
+      "method": "test_suite",
+      "command": "test/password.test.ts :: 'cambiar la contraseña invalida el refresh emitido antes'",
+      "result": "pass",
+      "output_excerpt": "refresh → 200 antes del cambio; cambio → 204; el mismo refresh → 401 después"
+    },
+    {
+      "check": "El access token en uso queda invalidado",
+      "method": "test_suite",
+      "command": "test/password.test.ts :: 'cambiar la contraseña invalida el access token en uso'",
+      "result": "pass",
+      "output_excerpt": "/auth/me 200 antes; tras el cambio el mismo Bearer devuelve 401"
+    },
+    {
+      "check": "Se revocan TODAS las familias, no solo la sesión actual",
+      "method": "test_suite",
+      "command": "test/password.test.ts :: 'todas las familias del usuario quedan revocadas'",
+      "result": "pass",
+      "output_excerpt": "2 familias activas (dos dispositivos); tras el cambio: count(revoked_at is null) = 0; el refresh del segundo dispositivo → 401"
+    },
+    {
+      "check": "La contraseña nueva entra y la vieja no",
+      "method": "test_suite",
+      "command": "test/password.test.ts :: 'la contraseña nueva funciona y la vieja deja de servir'",
+      "result": "pass",
+      "output_excerpt": "login con la vieja → 401; login con la nueva → 200"
+    },
+    {
+      "check": "Con la contraseña actual incorrecta no se modifica nada",
+      "method": "test_suite",
+      "command": "test/password.test.ts :: 'con la contraseña actual incorrecta no se cambia nada'",
+      "result": "pass",
+      "output_excerpt": "401; token_version y password_hash idénticos antes/después; la sesión sigue viva (refresh 200)"
+    },
+    {
+      "check": "El endpoint exige autenticación y valida la política de la nueva contraseña",
+      "method": "test_suite",
+      "command": "test/password.test.ts :: 2 casos",
+      "result": "pass",
+      "output_excerpt": "sin Bearer → 401; new_password='corta' → 400"
+    },
+    {
+      "check": "Orden de operaciones: primero revocar sesiones, después cambiar el hash",
+      "method": "read_back",
+      "command": "Get-Content services/auth/src/app.ts",
+      "result": "pass",
+      "output_excerpt": "await revokeAllUserRefreshTokens(...) precede a await updatePasswordHash(...); si fallara el segundo paso el usuario re-autentica, en vez de quedar con refresh vivos y clave nueva"
+    },
+    {
+      "check": "Auditoría de dependencias sin High/Critical",
+      "method": "test_suite",
+      "command": "npm audit --cache <workspace>/.npm-cache --json",
+      "result": "pass",
+      "output_excerpt": "{\"info\":0,\"low\":0,\"moderate\":0,\"high\":0,\"critical\":0,\"total\":0}"
+    },
+    {
+      "check": "Ejecución contra PostgreSQL real",
+      "method": "command",
+      "result": "not_run",
+      "not_run_reason": "Sandbox sin sockets de escucha. La secuencia revocar→cambiar no está en una transacción (pg-mem no la garantiza), así que en PostgreSQL real conviene envolverla."
+    }
+  ],
+  "evidence_completeness": "partial",
+  "open_risks": [
+    "La secuencia revokeAllUserRefreshTokens + updatePasswordHash NO es transaccional: en PostgreSQL real debería ir en un BEGIN/COMMIT para que un fallo intermedio no deje estado a medias.",
+    "No hay límite de intentos en /auth/password: un atacante con un access token válido podría probar la contraseña actual por fuerza bruta (lo cubrirá F5 si se aplica también a esta ruta).",
+    "Sin PostgreSQL real no se prueba concurrencia entre dos cambios de contraseña simultáneos."
+  ],
+  "rollback": "Retirar POST /auth/password de app.ts y eliminar authenticate.ts y password.test.ts; revertir users.ts. Sin datos que deshacer.",
+  "self_approved": false,
+  "approvals": {
+    "verifier": null,
+    "decision": "pending",
+    "notes": "Ejecutado bajo EX-001. Sobre en partial por la ausencia de PostgreSQL real y por la falta de transacción explícita."
+  }
+}

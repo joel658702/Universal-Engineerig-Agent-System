@@ -1,0 +1,31 @@
+# Dependencias
+node_modules/
+.pnpm-store/
+
+# Secretos y entorno
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Artefactos de build y cobertura
+dist/
+build/
+coverage/
+*.tsbuildinfo
+
+# Logs y temporales
+*.log
+npm-debug.log*
+.DS_Store
+Thumbs.db
+
+# Python (tooling del corpus UEAS)
+__pycache__/
+*.pyc
+
+# Sandbox de este entorno
+.npm-cache/
+.pgdata/
+.probe*/

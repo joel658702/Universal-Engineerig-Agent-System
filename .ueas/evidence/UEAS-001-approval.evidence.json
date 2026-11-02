@@ -1,0 +1,75 @@
+{
+  "task_id": "UEAS-001-APPROVAL",
+  "agent": "BUILDER",
+  "requirement": "Registrar la aprobación humana del corpus .ueas/ v0.1 (mensaje «aprobado») y actualizar el estado de los documentos de BORRADOR a VIGENTE, conforme al procedimiento de CORE_RULES §8.",
+  "risk": {
+    "level": "L2",
+    "justification": "Modificación de .ueas/ que hace exigibles las reglas; autorizada explícitamente por el humano y limitada a cabeceras, checklist y changelog.",
+    "sensitive_data": false,
+    "production": false,
+    "critical_structures": true
+  },
+  "confirmation": {
+    "required": true,
+    "status": "granted",
+    "granted_by": "Operador humano, mensaje literal: «aprobado» (2026-11-01)"
+  },
+  "changes": [
+    { "path": ".ueas/CORE_RULES.md", "action": "modify", "summary": "Cabecera BORRADOR→VIGENTE con aprobador y fecha; preámbulo declara que la aprobación fue global y sin revisión línea por línea." },
+    { "path": ".ueas/AGENT_SPECIFICATIONS.md", "action": "modify", "summary": "Cabecera BORRADOR→VIGENTE con aprobador y fecha." },
+    { "path": ".ueas/README.md", "action": "modify", "summary": "Cabecera de estado y checklist: aprobación marcada, revisión detallada añadida como pendiente." },
+    { "path": ".ueas/CHANGELOG.md", "action": "modify", "summary": "Nueva entrada 0.1 VIGENTE con aprobador, alcance y efecto; la entrada anterior pasa a histórico." },
+    { "path": ".ueas/evidence/UEAS-001-approval.evidence.json", "action": "create", "summary": "Evidencia de esta tarea." }
+  ],
+  "verification": [
+    {
+      "check": "Las tres cabeceras de estado declaran VIGENTE y nombran aprobador y fecha; ninguna dice BORRADOR",
+      "method": "command",
+      "command": "Select-String -Path .ueas\\*.md -Pattern 'Estado:|Aprobado por:|Vigente desde:'",
+      "result": "pass",
+      "output_excerpt": "CORE_RULES.md:3 '**Estado:** VIGENTE — v0.1 aprobada.' / :4 '**Aprobado por:** operador humano del workspace, 2026-11-01' / :5 '**Vigente desde:** 2026-11-01'; AGENT_SPECIFICATIONS.md:3-5 idénticas; README.md cabecera VIGENTE. Ninguna cabecera dice BORRADOR."
+    },
+    {
+      "check": "Barrido de la palabra BORRADOR en todo .ueas/: solo quedan menciones históricas, no estados vigentes",
+      "method": "command",
+      "command": "Get-ChildItem .ueas -Recurse -File -Include *.md,*.json,*.py | Select-String -Pattern 'BORRADOR'",
+      "result": "pass",
+      "output_excerpt": "total_menciones=11 en 3 archivos: CHANGELOG.md (entradas histórica y nueva que la mencionan), UEAS-000-scaffold.evidence.json (riesgo registrado cuando era borrador) y UEAS-001-approval.evidence.json (describe el propio cambio). Ninguna en CORE_RULES.md ni AGENT_SPECIFICATIONS.md."
+    },
+    {
+      "check": "El changelog contiene la entrada de aprobación con aprobador humano, alcance y efecto",
+      "method": "read_back",
+      "command": "Get-Content .ueas\\CHANGELOG.md -TotalCount 20",
+      "result": "pass",
+      "output_excerpt": "## [0.1] — 2026-11-01 — VIGENTE (aprobado) / **Aprobado por:** operador humano del workspace, 2026-11-01, mensaje «aprobado» / **Efecto:** ... R1–R8 son exigibles desde esta fecha."
+    },
+    {
+      "check": "El esquema sigue validando el ejemplo y los 8 casos de la suite tras los cambios (regresión)",
+      "method": "test_suite",
+      "command": "python C:\\Users\\joe\\AppData\\Local\\Temp\\ueas_suite.py   (script NO versionado; ver open_risks)",
+      "result": "pass",
+      "output_excerpt": "RESULTADO: TODOS_OK / exit_suite=0 — 8/8 casos con el resultado esperado"
+    },
+    {
+      "check": "Ambos sobres de evidencia validan contra EVIDENCE_SCHEMA.json",
+      "method": "schema_validation",
+      "command": "python .ueas\\tools\\validate_evidence.py .ueas\\evidence\\UEAS-001-approval.evidence.json ; ... UEAS-000-scaffold.evidence.json",
+      "result": "pass",
+      "output_excerpt": "PASS .ueas\\evidence\\UEAS-001-approval.evidence.json\nPASS .ueas\\evidence\\UEAS-000-scaffold.evidence.json"
+    }
+  ],
+  "evidence_completeness": "complete",
+  "open_risks": [
+    "La aprobación v0.1 fue global, no una revisión línea por línea: las reglas que gobiernan al BUILDER fueron redactadas por el BUILDER.",
+    "La suite de 8 casos del validador vive en %TEMP% y no está versionada: un tercero no puede reproducirla. Incorporarla a .ueas/tools/ requiere autorización bajo R2.",
+    "Sigue sin existir un VERIFIER independiente; por R1 esta entrega no puede pasar a VERIFICADA."
+  ],
+  "rollback": "Revertir las cuatro cabeceras a su texto BORRADOR y eliminar la entrada de aprobación del CHANGELOG.",
+  "self_approved": false,
+  "approvals": {
+    "verifier": null,
+    "decision": "pending",
+    "notes": null
+  },
+  "delivered_at": "2026-11-01T13:30:14-05:00"
+}

@@ -1,0 +1,105 @@
+{
+  "task_id": "TASK-001-F2F3",
+  "agent": "BUILDER",
+  "requirement": "Implementar registro y login con argon2id, emisión y verificación de access tokens JWT (EdDSA) y middleware de protección, verificados contra pg-mem y declarados partial por no haber PostgreSQL real.",
+  "risk": {
+    "level": "L4",
+    "justification": "Núcleo de autenticación de TASK-001, ejecutado bajo la excepción EX-001 (DE-002); el nivel no cambia por la dispensa.",
+    "sensitive_data": true,
+    "critical_structures": true
+  },
+  "confirmation": {
+    "required": true,
+    "status": "granted",
+    "granted_by": "DE-001 (plan aprobado) + DE-002 (dispensa, registrada como EX-001 en RISK_ENGINE §10)"
+  },
+  "changes": [
+    { "path": "services/auth/src/passwords.ts", "action": "create", "summary": "argon2id (19 MiB, t=2, p=1), verificación tolerante a hash corrupto y quema de tiempo para usuarios inexistentes." },
+    { "path": "services/auth/src/tokens.ts", "action": "create", "summary": "JWT EdDSA con iss/aud/typ/jti/tv, lista blanca de algoritmo, leeway 30s; refresh opaco de 256 bits con SHA-256." },
+    { "path": "services/auth/src/users.ts", "action": "create", "summary": "Repositorio sobre Queryable genérico: buscar por email/id, crear usuario, insertar refresh token." },
+    { "path": "services/auth/src/app.ts", "action": "create", "summary": "POST /auth/register, POST /auth/login, GET /auth/me; 400/401/403/409; 404 y 500 sin filtrar detalles." },
+    { "path": "services/auth/test/auth.test.ts", "action": "create", "summary": "12 tests: registro, duplicado, validación, login, no-enumeración, y 6 negativos de token." },
+    { "path": "services/auth/test/support/fixtures.ts", "action": "create", "summary": "pg-mem con migraciones aplicadas y generación de claves Ed25519 por test." },
+    { "path": "services/auth/migrations/002_refresh_tokens.up.sql", "action": "modify", "summary": "token_hash pasa de bytea a text hexadecimal (64) con CHECK: contrato idéntico en PostgreSQL y en el emulador." },
+    { "path": "services/auth/README.md", "action": "modify", "summary": "Fases 2 y 3 marcadas como hechas, con el detalle de tests." },
+    { "path": ".ueas/evidence/UEAS-007-task001-f2f3.evidence.json", "action": "create", "summary": "Evidencia de esta tarea." }
+  ],
+  "verification": [
+    {
+      "check": "Suite completa del servicio en verde",
+      "method": "test_suite",
+      "command": "node --test --test-isolation=none \"test/**/*.test.ts\"",
+      "result": "pass",
+      "output_excerpt": "tests 20 · pass 20 · fail 0 · exit=0  (12 de auth + 3 de health + 5 de migraciones)"
+    },
+    {
+      "check": "La contraseña se guarda como argon2id y nunca en claro",
+      "method": "test_suite",
+      "command": "test/auth.test.ts :: 'registro crea el usuario y guarda argon2id, nunca la contraseña'",
+      "result": "pass",
+      "output_excerpt": "hash comienza por '$argon2id$'; el hash no contiene la contraseña; argon2.verify(hash, PASSWORD) === true"
+    },
+    {
+      "check": "Login no revela si el correo existe (misma respuesta y mismo coste)",
+      "method": "test_suite",
+      "command": "test/auth.test.ts :: 'login con contraseña incorrecta y con usuario inexistente dan la misma respuesta'",
+      "result": "pass",
+      "output_excerpt": "ambos 401 con cuerpo idéntico {\"error\":\"invalid_credentials\"}"
+    },
+    {
+      "check": "Rechazo de alg:none (el fallo clásico de JWT)",
+      "method": "test_suite",
+      "command": "test/auth.test.ts :: '/auth/me rechaza alg:none'",
+      "result": "pass",
+      "output_excerpt": "token forjado con header {alg:'none'} → 401"
+    },
+    {
+      "check": "Rechazo de token expirado, manipulado y firmado por otra clave",
+      "method": "test_suite",
+      "command": "test/auth.test.ts :: 3 casos de /auth/me",
+      "result": "pass",
+      "output_excerpt": "expirado → 401; último carácter alterado → 401; firmado con clave ajena → 401"
+    },
+    {
+      "check": "Revocación global por token_version",
+      "method": "test_suite",
+      "command": "test/auth.test.ts :: '/auth/me rechaza el token si sube token_version'",
+      "result": "pass",
+      "output_excerpt": "update users set token_version = token_version + 1 → mismo token pasa de 200 a 401"
+    },
+    {
+      "check": "El refresh token se guarda como SHA-256 hexadecimal, no en claro",
+      "method": "test_suite",
+      "command": "test/auth.test.ts :: 'login devuelve access token verificable y refresh opaco guardado como hash'",
+      "result": "pass",
+      "output_excerpt": "token_hash almacenado (64 hex) === sha256(refresh_token); el valor no contiene el token"
+    },
+    {
+      "check": "Auditoría de dependencias sin High/Critical",
+      "method": "test_suite",
+      "command": "npm audit --cache <workspace>/.npm-cache --json",
+      "result": "pass",
+      "output_excerpt": "{\"info\":0,\"low\":0,\"moderate\":0,\"high\":0,\"critical\":0,\"total\":0}"
+    },
+    {
+      "check": "Ejecución contra PostgreSQL real",
+      "method": "command",
+      "result": "not_run",
+      "not_run_reason": "El sandbox impide abrir sockets de escucha: postgres.exe muere con 'could not bind IPv4 address: Permission denied'. Todo se validó contra pg-mem."
+    }
+  ],
+  "evidence_completeness": "partial",
+  "open_risks": [
+    "pg-mem no reproduce el comportamiento real del driver pg: concurrencia, transacciones, tipos y planes de ejecución quedan sin probar.",
+    "El 409 del registro revela que un correo existe (compromiso consciente, documentado en app.ts); el login sí es indistinguible.",
+    "Sin PostgreSQL no se ha probado el índice único bajo concurrencia ni el ON DELETE CASCADE real.",
+    "Excepción EX-001 vigente: sin revisión de seguridad independiente."
+  ],
+  "rollback": "Eliminar src/passwords.ts, src/tokens.ts, src/users.ts, src/app.ts y las suites nuevas; revertir 002_refresh_tokens.up.sql a bytea. Sin datos que deshacer: no hay base real.",
+  "self_approved": false,
+  "approvals": {
+    "verifier": null,
+    "decision": "pending",
+    "notes": "Ejecutado bajo EX-001 (DE-002). Sobre en partial: sin PostgreSQL real no se puede declarar completo."
+  }
+}

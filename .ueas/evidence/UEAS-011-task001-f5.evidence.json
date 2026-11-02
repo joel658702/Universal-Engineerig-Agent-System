@@ -1,0 +1,109 @@
+{
+  "task_id": "TASK-001-F5",
+  "agent": "BUILDER",
+  "requirement": "Añadir rate limiting por IP en login/registro, por usuario en cambio de contraseña y por familia en rotación de refresh, con 429, Retry-After correcto y ventana reiniciable.",
+  "risk": {
+    "level": "L4",
+    "justification": "Fase de una tarea L4 (autenticación) bajo la excepción EX-001; mitiga fuerza bruta y uso masivo de tokens robados.",
+    "sensitive_data": true,
+    "critical_structures": true
+  },
+  "confirmation": {
+    "required": true,
+    "status": "granted",
+    "granted_by": "Operador humano, 2026-11-01: «F5 (rate limiting) aprobado con los siguientes requisitos…»"
+  },
+  "changes": [
+    { "path": "services/auth/src/rateLimiter.ts", "action": "create", "summary": "Ventana fija por clave, reloj inyectable, Retry-After calculado y barrido perezoso de ventanas caducadas." },
+    { "path": "services/auth/src/app.ts", "action": "modify", "summary": "Cuatro limitadores (login, registro, contraseña, refresh), helper rejectRateLimited y límites configurables por deps." },
+    { "path": "services/auth/src/refresh.ts", "action": "modify", "summary": "Hook onTokenResolved para limitar por familia sin duplicar la consulta." },
+    { "path": "services/auth/test/rateLimit.test.ts", "action": "create", "summary": "7 tests: límites por IP/usuario/familia, Retry-After, reapertura de ventana, no enumeración y uso normal." },
+    { "path": "services/auth/README.md", "action": "modify", "summary": "Documentados límites, alcance y la limitación de almacenamiento en memoria." },
+    { "path": ".ueas/evidence/UEAS-011-task001-f5.evidence.json", "action": "create", "summary": "Evidencia de esta tarea." }
+  ],
+  "verification": [
+    {
+      "check": "Suite completa sin regresiones",
+      "method": "test_suite",
+      "command": "node --test --test-isolation=none \"test/**/*.test.ts\"",
+      "result": "pass",
+      "output_excerpt": "tests 44 · pass 44 · fail 0 · exit=0  (7 nuevos de rate limiting)"
+    },
+    {
+      "check": "Login: 5 intentos por IP y el sexto es 429 con Retry-After",
+      "method": "test_suite",
+      "command": "test/rateLimit.test.ts :: 'login: 5 intentos por IP y el sexto responde 429'",
+      "result": "pass",
+      "output_excerpt": "intentos 1..5 → 401; el 6 → 429, cabecera Retry-After presente, cuerpo {\"error\":\"too_many_requests\"}"
+    },
+    {
+      "check": "El 429 no revela si la cuenta existe",
+      "method": "test_suite",
+      "command": "test/rateLimit.test.ts :: 'el 429 es idéntico para usuario existente e inexistente'",
+      "result": "pass",
+      "output_excerpt": "usuario real y fantasma → ambos 429 con cuerpo idéntico; el límite se aplica antes de resolver la credencial"
+    },
+    {
+      "check": "Retry-After es correcto y la ventana se reabre",
+      "method": "test_suite",
+      "command": "test/rateLimit.test.ts :: 'Retry-After refleja el tiempo restante y la ventana se reabre'",
+      "result": "pass",
+      "output_excerpt": "a los 20 s de 60 → '40'; a los 61 s → 401 (vuelve a evaluar la credencial)"
+    },
+    {
+      "check": "Password: 3 intentos por usuario",
+      "method": "test_suite",
+      "command": "test/rateLimit.test.ts :: 'password: 3 intentos por usuario y el cuarto responde 429'",
+      "result": "pass",
+      "output_excerpt": "intentos 1..3 → 401; el 4 → 429 con Retry-After > 0"
+    },
+    {
+      "check": "Refresh: 10 rotaciones por familia",
+      "method": "test_suite",
+      "command": "test/rateLimit.test.ts :: 'refresh: 10 rotaciones por familia y la onceava responde 429'",
+      "result": "pass",
+      "output_excerpt": "rotaciones 1..10 → 200; la 11 → 429"
+    },
+    {
+      "check": "El uso legítimo no se ve afectado",
+      "method": "test_suite",
+      "command": "test/rateLimit.test.ts :: 'uso normal: varias sesiones legítimas no se ven afectadas'",
+      "result": "pass",
+      "output_excerpt": "3 logins + 5 rotaciones encadenadas → 200 todas"
+    },
+    {
+      "check": "El limitador aísla claves distintas y reabre al cumplir la ventana",
+      "method": "test_suite",
+      "command": "test/rateLimit.test.ts :: 'el limitador es reutilizable y aísla claves distintas'",
+      "result": "pass",
+      "output_excerpt": "clave 'a' bloqueada con retryAfterSeconds=1; clave 'b' intacta; avanzado 1 s, 'a' vuelve a permitir"
+    },
+    {
+      "check": "Auditoría de dependencias sin High/Critical",
+      "method": "test_suite",
+      "command": "npm audit --cache <workspace>/.npm-cache --json",
+      "result": "pass",
+      "output_excerpt": "{\"info\":0,\"low\":0,\"moderate\":0,\"high\":0,\"critical\":0,\"total\":0}"
+    },
+    {
+      "check": "Rate limiting entre varias instancias del servicio",
+      "method": "command",
+      "result": "not_run",
+      "not_run_reason": "El almacenamiento es en memoria por proceso; con más de una instancia el límite efectivo se multiplica. Requiere Redis u otro almacén compartido."
+    }
+  ],
+  "evidence_completeness": "complete",
+  "open_risks": [
+    "Estado en memoria: con N instancias el límite real es N veces el configurado. Migrar a Redis antes de escalar horizontalmente.",
+    "El límite por IP asume que req.ip es fiable: detrás de un proxy hay que configurar trust proxy o todos los clientes comparten la IP del balanceador.",
+    "Los límites son ventana fija: un atacante puede hacer ráfagas en el borde de la ventana (hasta 2x el cupo en un instante). Suficiente contra fuerza bruta ingenua; una ventana deslizante sería más estricta.",
+    "Registro también limitado a 5/min por IP: decisión propia, no estaba en los requisitos."
+  ],
+  "rollback": "Eliminar src/rateLimiter.ts y test/rateLimit.test.ts; retirar las llamadas a los limitadores de app.ts y el hook de refresh.ts. Sin datos que deshacer.",
+  "self_approved": false,
+  "approvals": {
+    "verifier": null,
+    "decision": "pending",
+    "notes": "Ejecutado bajo EX-001. Completo para lo declarado; la limitación multi-instancia queda declarada, no probada."
+  }
+}

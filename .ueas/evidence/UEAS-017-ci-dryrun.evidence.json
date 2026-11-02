@@ -1,0 +1,128 @@
+{
+  "task_id": "UEAS-017",
+  "agent": "BUILDER",
+  "requirement": "Ejecutar el CI y entregar la evidencia de su primera corrida. GitHub Actions no es accesible desde este entorno, así que se ejecutan localmente los mismos pasos y se declaran las diferencias.",
+  "risk": {
+    "level": "L2",
+    "justification": "Ejecución de verificaciones existentes sobre el propio repositorio; sin cambios de código de producción.",
+    "sensitive_data": false,
+    "critical_structures": true
+  },
+  "confirmation": {
+    "required": true,
+    "status": "granted",
+    "granted_by": "Operador humano, 2026-11-02: «Ejecuta el CI y entrégame la evidencia de la primera corrida (UEAS-017)»"
+  },
+  "changes": [
+    { "path": "TECH_DEBT.md", "action": "modify", "summary": "Partida 15: migrate up no es idempotente (no hay tabla schema_migrations); detectado en este dry-run." },
+    { "path": ".ueas/evidence/UEAS-017-ci-dryrun.evidence.json", "action": "create", "summary": "Evidencia de esta tarea." }
+  ],
+  "verification": [
+    {
+      "check": "Ejecución real en GitHub Actions",
+      "method": "command",
+      "result": "not_run",
+      "not_run_reason": "No hay remoto configurado (git remote vacío) ni credenciales de GitHub. El workflow solo corre en la infraestructura de Actions; no es ejecutable desde aquí."
+    },
+    {
+      "check": "Paso npm ci (job auth-service)",
+      "method": "command",
+      "command": "npm ci --ignore-scripts --cache <workspace>/.npm-cache",
+      "result": "pass",
+      "output_excerpt": "added 126 packages, and audited 127 packages in 9s · found 0 vulnerabilities · exit=0"
+    },
+    {
+      "check": "Paso npm audit --audit-level=high",
+      "method": "command",
+      "command": "npm audit --audit-level=high",
+      "result": "pass",
+      "output_excerpt": "found 0 vulnerabilities · exit=0"
+    },
+    {
+      "check": "Paso migrate up sobre base existente (comportamiento real, no el del CI)",
+      "method": "command",
+      "command": "node scripts/migrate.mjs up",
+      "result": "fail",
+      "output_excerpt": "error heap_create_with_catalog: las tablas ya existen. El CI no lo detecta porque su service container arranca vacío. HALLAZGO: no hay tabla schema_migrations; up no es idempotente."
+    },
+    {
+      "check": "Paso migrate up tras reiniciar el esquema (condición del runner limpio)",
+      "method": "command",
+      "command": "node scripts/migrate.mjs down ; node scripts/migrate.mjs up",
+      "result": "pass",
+      "output_excerpt": "revertida: 002_refresh_tokens.down.sql / 001_users.down.sql · aplicada: 001_users.up.sql / 002_refresh_tokens.up.sql"
+    },
+    {
+      "check": "Paso suite con el comando exacto del CI (--test-concurrency=1)",
+      "method": "command",
+      "command": "node --test --test-concurrency=1 \"test/**/*.test.ts\"",
+      "result": "fail",
+      "output_excerpt": "Error: spawn EPERM (errno -4048) al lanzar cada archivo en un subproceso. En Ubuntu no ocurre; el sandbox de Windows bloquea el spawn canalizado."
+    },
+    {
+      "check": "Paso suite con variante local (--test-isolation=none)",
+      "method": "test_suite",
+      "command": "node --test --test-isolation=none --test-concurrency=1 \"test/**/*.test.ts\"",
+      "result": "pass",
+      "output_excerpt": "tests 55 · pass 55 · fail 0 · skipped 0 · exit=0"
+    },
+    {
+      "check": "Paso f7-drill",
+      "method": "test_suite",
+      "command": "node scripts/f7-drill.mjs",
+      "result": "pass",
+      "output_excerpt": "5 comprobaciones, 0 fallos: down/up, migración fallida revertida, registro [201,409], refresh [200,401] con 0 tokens vivos, BEGIN/ROLLBACK sin insert"
+    },
+    {
+      "check": "Paso migrate down final",
+      "method": "command",
+      "command": "node scripts/migrate.mjs down",
+      "result": "pass",
+      "output_excerpt": "exit=0"
+    },
+    {
+      "check": "Job governance: selftest de contratos",
+      "method": "test_suite",
+      "command": "python .ueas/scripts/verify_evidence_format.py --selftest",
+      "result": "pass",
+      "output_excerpt": "6 casos · 0 fallos · exit=0"
+    },
+    {
+      "check": "Job governance: validación de artefactos",
+      "method": "schema_validation",
+      "command": "python .ueas/scripts/verify_evidence_format.py",
+      "result": "pass",
+      "output_excerpt": "19 artefactos · 0 con fallos · exit=0"
+    },
+    {
+      "check": "Job governance: políticas de seguridad",
+      "method": "test_suite",
+      "command": "python .ueas/scripts/verify_security_policies.py",
+      "result": "pass",
+      "output_excerpt": "archivos de código escaneados: 29 · hallazgos: 0 · exit=0"
+    },
+    {
+      "check": "Entorno devuelto a su estado previo",
+      "method": "command",
+      "command": "docker compose down ; Test-NetConnection 127.0.0.1 -Port 5432",
+      "result": "pass",
+      "output_excerpt": "Network auth_default Removed · puerto_5432=False"
+    }
+  ],
+  "evidence_completeness": "partial",
+  "open_risks": [
+    "GitHub Actions NUNCA se ha ejecutado: el workflow puede tener errores de sintaxis o de entorno que solo aparecerán en su primera corrida real.",
+    "Tres desviaciones respecto al CI: npm ci usó --ignore-scripts (el sandbox bloquea postinstall); la suite usó --test-isolation=none; el service container es docker compose local en lugar del servicio gestionado por Actions.",
+    "El dry-run corre sobre Windows; el CI sobre ubuntu-latest. Diferencias de rutas, finales de línea y módulos nativos no se cubren.",
+    "HALLAZGO ABIERTO: migrate up no es idempotente. En un re-deploy sobre una base existente fallará. Anotado como deuda 15.",
+    "No hay remoto configurado: el repositorio solo existe en esta máquina.",
+    "El volumen Docker auth_auth_pgdata persiste aunque el contenedor se haya eliminado."
+  ],
+  "rollback": "Eliminar .ci-dryrun.log y la evidencia; revertir TECH_DEBT.md. El dry-run no modifica el repositorio más allá de esto.",
+  "self_approved": false,
+  "approvals": {
+    "verifier": null,
+    "decision": "pending",
+    "notes": "No es la primera corrida del CI: es un dry-run local con tres desviaciones declaradas. Llamarlo «CI ejecutado» sería impreciso."
+  }
+}

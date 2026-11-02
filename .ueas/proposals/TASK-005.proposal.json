@@ -1,0 +1,84 @@
+{
+  "task_id": "TASK-005",
+  "agent": "BUILDER",
+  "requirement": "Cubrir la custodia de la clave maestra de MFA: documentar el procedimiento, script de rotación transaccional y script de recuperación por pérdida con confirmación explícita y auditoría.",
+  "risk": {
+    "level": "L4",
+    "justification": "Manipula la clave que protege todas las credenciales de segundo factor (F1=4) y añade una vía administrativa para desactivar MFA, es decir, para saltar el segundo factor (F4=4). No es L2: un error deja a todos los usuarios con MFA sin poder entrar, o permite desactivarlo sin control.",
+    "factors": { "F1": 4, "F2": 2, "F3": 3, "F4": 4, "F5": 1, "F6": 3 }
+  },
+  "confirmation": {
+    "required": true,
+    "status": "pending",
+    "granted_by": null
+  },
+  "plan": [
+    {
+      "step": 1,
+      "description": "docs/mfa-key-management.md con: propósito, modelo de amenaza, custodia de la clave (dónde vive, quién accede, backup, separación por entorno), formato del secreto cifrado, procedimiento de rotación, procedimiento de recuperación por pérdida, runbook de clave comprometida, checklist y registro de rotaciones.",
+      "verifiable_by": "el documento cubre las 9 secciones y cada procedimiento tiene pasos con comando y verificación"
+    },
+    {
+      "step": 2,
+      "description": "rotate-mfa-key.mjs: lee la clave actual y la nueva, re-cifra en UNA transacción todos los secretos con key_id antiguo y actualiza key_id. Cualquier fallo hace ROLLBACK completo: no queda un estado mixto ilegible.",
+      "verifiable_by": "test: con un secreto corrupto inyectado, la rotación aborta y ningún key_id cambia"
+    },
+    {
+      "step": 3,
+      "description": "La rotación se verifica antes de confirmar: descifra con la clave nueva cada fila recién escrita dentro de la misma transacción. Si alguna no descifra, ROLLBACK.",
+      "verifiable_by": "test: tras rotar, todas las filas se descifran con la nueva y ninguna con la vieja"
+    },
+    {
+      "step": 4,
+      "description": "Modos del script de rotación: --dry-run (cuenta filas sin escribir) e idempotencia (segunda ejecución no encuentra filas con key_id antiguo y termina con «nada que rotar»).",
+      "verifiable_by": "test: dry-run no cambia nada; segunda rotación real informa 0 filas"
+    },
+    {
+      "step": 5,
+      "description": "Migración 005: tabla mfa_recovery_audit (id, user_id, operator, reason, mfa_was_enabled, at) para que la recuperación quede registrada en base de datos, no solo en stdout.",
+      "verifiable_by": "migrate up/down de 005 y consulta de la fila de auditoría tras una recuperación"
+    },
+    {
+      "step": 6,
+      "description": "recover-mfa-loss.mjs: exige --user, --confirm con el mismo identificador y --reason; sin los tres no hace nada y sale con código 2. Borra secreto y códigos, sube token_version e inserta la fila de auditoría en la misma transacción.",
+      "verifiable_by": "test: sin confirmación no borra nada; con confirmación incorrecta tampoco; correcta → MFA desactivado, sesiones revocadas y auditoría escrita"
+    },
+    {
+      "step": 7,
+      "description": "El script de recuperación no imprime nunca secretos ni códigos; imprime el user_id, el operador, el motivo y el resultado, y lo mismo queda en la tabla de auditoría.",
+      "verifiable_by": "test: la salida no contiene el secreto ni ningún código de recuperación"
+    },
+    {
+      "step": 8,
+      "description": "tests/keyManagement.test.ts con rotación (éxito, fallo a mitad, dry-run, idempotencia, verificación de descifrado), recuperación (confirmación, auditoría, revocación, idempotencia) y el flujo posterior al cambio: login con MFA sigue funcionando tras rotar.",
+      "verifiable_by": "suite completa en verde contra PostgreSQL real con los tests nuevos"
+    }
+  ],
+  "files_expected": [
+    { "path": "docs/mfa-key-management.md", "action": "create" },
+    { "path": "services/auth/scripts/rotate-mfa-key.mjs", "action": "create" },
+    { "path": "services/auth/scripts/recover-mfa-loss.mjs", "action": "create" },
+    { "path": "services/auth/migrations/005_mfa_recovery_audit.up.sql", "action": "create" },
+    { "path": "services/auth/migrations/005_mfa_recovery_audit.down.sql", "action": "create" },
+    { "path": "services/auth/test/keyManagement.test.ts", "action": "create" },
+    { "path": "TECH_DEBT.md", "action": "modify" },
+    { "path": ".ueas/evidence/UEAS-021-task005.evidence.json", "action": "create" }
+  ],
+  "evidence_planned": [
+    "salida de la rotación con dry-run, ejecución real y segunda ejecución idempotente",
+    "consulta a user_mfa_secrets mostrando los key_id tras rotar",
+    "prueba de fallo a mitad: la transacción deja todos los key_id intactos",
+    "login con MFA funcionando después de la rotación",
+    "salida del script de recuperación sin secretos y su fila en mfa_recovery_audit",
+    "suite completa contra PostgreSQL 16 real"
+  ],
+  "rollback": "Rotación: conservar la clave vieja hasta verificar; si algo falla, la transacción deja todo como estaba y el servicio sigue con la clave actual. Recuperación: no es reversible por diseño (borra el enrolamiento de ese usuario); el usuario debe volver a enrolarse. Documento y migración 005 se revierten con migrate down.",
+  "stop_conditions": [
+    "Si la transacción de rotación bloquea la tabla más de lo aceptable para el tamaño real, se detiene y se propone el patrón de keyring con doble clave y reanudación",
+    "Si el script de recuperación no puede garantizar la confirmación explícita, no se entrega",
+    "Si el operador no aporta DE-006 ni segunda firma, no se ejecuta (L4)",
+    "Si aparece cualquier ruta que permita desactivar MFA sin contraseña ni código ni auditoría, se detiene"
+  ],
+  "state": "PROPUESTA",
+  "created_at": "2026-11-02T11:50:00-05:00"
+}

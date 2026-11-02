@@ -1,0 +1,135 @@
+{
+  "task_id": "TASK-005",
+  "agent": "BUILDER",
+  "requirement": "Documentar la custodia de la clave maestra de MFA y entregar los scripts de rotación transaccional y de recuperación por pérdida con confirmación explícita y auditoría en tabla.",
+  "risk": {
+    "level": "L4",
+    "justification": "Manipula la clave que protege todas las credenciales de segundo factor (F1=4) y añade una vía administrativa para saltar el segundo factor (F4=4). Ejecutado bajo DE-006.",
+    "sensitive_data": true,
+    "critical_structures": true
+  },
+  "confirmation": {
+    "required": true,
+    "status": "granted",
+    "granted_by": "DE-006 — dispensa de doble firma para TASK-005 (operador humano, 2026-11-02)"
+  },
+  "changes": [
+    { "path": "docs/mfa-key-management.md", "action": "create", "summary": "9 secciones: propósito, modelo de amenaza, custodia, formato, rotación, recuperación, runbook de compromiso, checklist y registro." },
+    { "path": "services/auth/migrations/005_mfa_recovery_audit.up.sql", "action": "create", "summary": "Tabla mfa_recovery_audit con user_id, operator, reason, mfa_was_enabled y created_at." },
+    { "path": "services/auth/migrations/005_mfa_recovery_audit.down.sql", "action": "create", "summary": "Reversión de la tabla de auditoría." },
+    { "path": "services/auth/scripts/rotate-mfa-key.mjs", "action": "create", "summary": "Rotación en una transacción con SELECT FOR UPDATE, verificación de descifrado antes del COMMIT, --dry-run e idempotencia." },
+    { "path": "services/auth/scripts/recover-mfa-loss.mjs", "action": "create", "summary": "Desactivación administrativa con --user/--confirm/--reason obligatorios, auditoría en tabla y salida sin secretos." },
+    { "path": "services/auth/test/mfa-key-rotation.test.ts", "action": "create", "summary": "10 tests: validación de argumentos, rotación, dry-run, idempotencia, fallo a mitad, recuperación con y sin MFA, usuario inexistente e integración con login." },
+    { "path": "TECH_DEBT.md", "action": "modify", "summary": "Partida 17 añadida y RESUELTA; la 16 (replay TOTP) permanece abierta." },
+    { "path": ".ueas/decisions/DE-006.md", "action": "create", "summary": "Dispensa de doble firma con las decisiones aceptadas por instrucción." },
+    { "path": ".ueas/evidence/UEAS-021-task005.evidence.json", "action": "create", "summary": "Evidencia de esta tarea." }
+  ],
+  "verification": [
+    {
+      "check": "La migración 005 aplica y revierte",
+      "method": "command",
+      "command": "node scripts/migrate.mjs up",
+      "result": "pass",
+      "output_excerpt": "aplicada: 005_mfa_recovery_audit.up.sql"
+    },
+    {
+      "check": "Rotación: re-cifra y cambia key_id; la clave vieja ya no descifra",
+      "method": "test_suite",
+      "command": "test/mfa-key-rotation.test.ts :: 'la rotación re-cifra todo y cambia key_id'",
+      "result": "pass",
+      "output_excerpt": "rotated: 1 · key_id = v2 · decrypt con la nueva OK · decrypt con la vieja lanza"
+    },
+    {
+      "check": "--dry-run no modifica nada",
+      "method": "test_suite",
+      "command": "test/mfa-key-rotation.test.ts :: '--dry-run no modifica nada'",
+      "result": "pass",
+      "output_excerpt": "total 1, rotated 0, y la fila sigue con key_id = v1"
+    },
+    {
+      "check": "Idempotencia de la rotación",
+      "method": "test_suite",
+      "command": "test/mfa-key-rotation.test.ts :: 'la rotación es idempotente'",
+      "result": "pass",
+      "output_excerpt": "primera rotación 1 fila; segunda 0 filas"
+    },
+    {
+      "check": "Fallo a mitad: ningún key_id cambia (ROLLBACK real)",
+      "method": "test_suite",
+      "command": "test/mfa-key-rotation.test.ts :: 'fallo a mitad: la transacción deja todos los key_id intactos'",
+      "result": "pass",
+      "output_excerpt": "se corrompe el criptograma de la segunda fila → rotate lanza → ambos key_id siguen en v1"
+    },
+    {
+      "check": "Recuperación: desactiva MFA, revoca sesiones y deja auditoría",
+      "method": "test_suite",
+      "command": "test/mfa-key-rotation.test.ts :: 'recover desactiva MFA, revoca sesiones y deja auditoría'",
+      "result": "pass",
+      "output_excerpt": "secreto y códigos borrados · token_version 2 · fila en mfa_recovery_audit con operator 'ana', reason 'ticket #42' y mfa_was_enabled=true"
+    },
+    {
+      "check": "Recuperación sin MFA activo y con usuario inexistente",
+      "method": "test_suite",
+      "command": "test/mfa-key-rotation.test.ts :: 2 casos",
+      "result": "pass",
+      "output_excerpt": "sin MFA: audita con mfa_was_enabled=false y no borra nada; usuario inexistente: no escribe auditoría"
+    },
+    {
+      "check": "Confirmación obligatoria y coincidente",
+      "method": "test_suite",
+      "command": "test/mfa-key-rotation.test.ts :: 2 casos de argumentos",
+      "result": "pass",
+      "output_excerpt": "sin --user/--confirm/--reason u OPERATOR → ok=false; confirmación distinta → error 'la confirmación no coincide con --user'"
+    },
+    {
+      "check": "Integración: el login con MFA funciona tras la rotación",
+      "method": "test_suite",
+      "command": "test/mfa-key-rotation.test.ts :: 'tras rotar, el login con MFA sigue funcionando con la clave nueva'",
+      "result": "pass",
+      "output_excerpt": "app con clave vieja enrola y activa MFA; se rota; app con clave nueva pide mfa_required y el verify devuelve 200"
+    },
+    {
+      "check": "Suite completa contra PostgreSQL 16 real",
+      "method": "test_suite",
+      "command": "TEST_DATABASE_URL=... node --test --test-isolation=none \"test/**/*.test.ts\"",
+      "result": "pass",
+      "output_excerpt": "tests 95 · pass 95 · fail 0 · skipped 0"
+    },
+    {
+      "check": "Suite completa con pg-mem",
+      "method": "test_suite",
+      "command": "node --test --test-isolation=none \"test/**/*.test.ts\"",
+      "result": "pass",
+      "output_excerpt": "tests 95 · pass 87 · fail 0 · skipped 8 (los que exigen FOR UPDATE y ROLLBACK reales)"
+    },
+    {
+      "check": "Drill F7 con la migración 005",
+      "method": "test_suite",
+      "command": "node scripts/f7-drill.mjs",
+      "result": "pass",
+      "output_excerpt": "5 comprobaciones, 0 fallos"
+    },
+    {
+      "check": "Ejecución de los scripts como CLI (proceso hijo)",
+      "method": "command",
+      "result": "not_run",
+      "not_run_reason": "El sandbox bloquea spawn con stdio canalizado (EPERM). La lógica está probada importando las funciones; el envoltorio de línea de comandos no se ha ejecutado como proceso."
+    }
+  ],
+  "evidence_completeness": "partial",
+  "open_risks": [
+    "Los scripts no se han ejecutado como proceso CLI: la lógica está probada, el parseo de argv y el manejo de exit codes no.",
+    "La rotación bloquea user_mfa_secrets durante toda la operación; con volumen alto hay que pasar a keyring por lotes.",
+    "El orden de despliegue importa: si se rota en base de datos antes de que el servicio conozca la clave nueva, todos los descifrados fallan. Está documentado, no automatizado.",
+    "recover-mfa-loss no exige doble persona: un operador con acceso puede desactivar MFA de cualquier cuenta, con auditoría pero sin contrapeso.",
+    "La partida 16 (replay de TOTP dentro de la ventana) sigue abierta y no se tocó en esta tarea.",
+    "No hay rotación automática programada; el procedimiento es manual."
+  ],
+  "rollback": "migrate down de 005 y eliminar los scripts y el documento. Si ya se rotó, conservar la clave vieja hasta confirmar que el servicio usa la nueva.",
+  "self_approved": false,
+  "approvals": {
+    "verifier": null,
+    "decision": "pending",
+    "notes": "Ejecutado bajo DE-006 (una firma). La partida 16 permanece abierta por indicación del operador."
+  }
+}

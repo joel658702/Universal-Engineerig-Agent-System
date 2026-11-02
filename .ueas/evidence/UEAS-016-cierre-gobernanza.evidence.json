@@ -1,0 +1,101 @@
+{
+  "task_id": "UEAS-016",
+  "agent": "BUILDER",
+  "requirement": "Cerrar el ciclo de gobernanza: emitir el veredicto de TASK-001, inicializar el repositorio con commit inicial, añadir CI y TECH_DEBT, y dejar constancia de lo ejecutado y de lo que no.",
+  "risk": {
+    "level": "L2",
+    "justification": "Artefactos de gobernanza y control de versiones; sin código de producción nuevo ni datos sensibles.",
+    "sensitive_data": false,
+    "critical_structures": true
+  },
+  "confirmation": {
+    "required": true,
+    "status": "granted",
+    "granted_by": "Operador humano, 2026-11-02: «Ejecuta git init, configura el .gitignore y haz el commit inicial…»"
+  },
+  "changes": [
+    { "path": ".ueas/verdicts/TASK-001.verdict.json", "action": "create", "summary": "Veredicto APPROVED de TASK-001 con 5 comprobaciones reproducidas y self_verdict=false." },
+    { "path": ".github/workflows/ci.yml", "action": "create", "summary": "CI: servicio con PostgreSQL 16 (npm ci, audit, migraciones, 55 tests, drill F7, down) y validación de los tres contratos." },
+    { "path": "TECH_DEBT.md", "action": "create", "summary": "14 partidas de deuda técnica, cada una con impacto y disparador para pagarla." },
+    { "path": ".gitattributes", "action": "create", "summary": "Normalización a LF (eol=lf) para evitar CRLF de Windows en el repositorio." },
+    { "path": ".ueas/evidence/UEAS-016-cierre-gobernanza.evidence.json", "action": "create", "summary": "Evidencia de esta tarea." }
+  ],
+  "verification": [
+    {
+      "check": "Repositorio inicializado y commit inicial creado",
+      "method": "command",
+      "command": "git init -b main ; git add -A ; git commit",
+      "result": "pass",
+      "output_excerpt": "Initialized empty Git repository in C:/Users/joe/Universal Engineering Agent System/.git/ ; [main 83f4a44] chore: corpus UEAS y servicio de autenticacion (TASK-001 F0-F7) ; 69 archivos"
+    },
+    {
+      "check": "Nada prohibido entró al commit (node_modules, caché npm, datos de PostgreSQL, logs)",
+      "method": "command",
+      "command": "git diff --cached --name-only | Select-String 'node_modules|\\.npm-cache|\\.pgdata|\\.log$'",
+      "result": "pass",
+      "output_excerpt": "total=69 · OK: 0 entradas prohibidas"
+    },
+    {
+      "check": "El árbol de trabajo queda limpio tras el commit",
+      "method": "command",
+      "command": "git status --short",
+      "result": "pass",
+      "output_excerpt": "(sin salida) — 0 archivos pendientes"
+    },
+    {
+      "check": "El veredicto valida contra VERDICT_SCHEMA.json y respeta R1",
+      "method": "schema_validation",
+      "command": "python .ueas/scripts/verify_evidence_format.py",
+      "result": "pass",
+      "output_excerpt": "PASS verdict/TASK-001.verdict.json — 18 artefactos, 0 con fallos"
+    },
+    {
+      "check": "El veredicto no contiene afirmaciones sin reproducir",
+      "method": "read_back",
+      "command": "Get-Content .ueas/verdicts/TASK-001.verdict.json",
+      "result": "pass",
+      "output_excerpt": "unverified_claims: [] · 5 checks_reproduced con match:true · self_verdict: false"
+    },
+    {
+      "check": "TECH_DEBT.md contiene las 14 partidas con disparador",
+      "method": "command",
+      "command": "Select-String TECH_DEBT.md -Pattern '^\\| [0-9]+ \\|'",
+      "result": "pass",
+      "output_excerpt": "14 filas numeradas; cada una con impacto y «disparador para pagarla»"
+    },
+    {
+      "check": "El workflow de CI contiene los jobs y el servicio esperados",
+      "method": "manual_inspection",
+      "command": "Get-Content .github/workflows/ci.yml",
+      "result": "pass",
+      "output_excerpt": "Lectura línea a línea: name: CI · on: push/pull_request · jobs.auth-service (services.postgres image postgres:16-alpine, healthcheck pg_isready, 9 pasos) · jobs.governance (Python 3.12, selftest + validación + políticas). NO parseado con PyYAML: no instalado e ininstalable aquí."
+    },
+    {
+      "check": "Parseo formal del YAML del workflow",
+      "method": "command",
+      "result": "not_run",
+      "not_run_reason": "PyYAML no está instalado y pip falla con EPERM (sandbox). La validación real del workflow será su primera ejecución en GitHub Actions."
+    },
+    {
+      "check": "Actualizar los sobres de evidencia a APPROVED",
+      "method": "command",
+      "result": "not_run",
+      "not_run_reason": "No ejecutado por R1: el BUILDER no puede escribir approvals.decision='approved' en sus propias entregas; verify_evidence_format.py lo rechaza explícitamente. La aprobación se emitió como veredicto separado (TASK-001.verdict.json), que es el artefacto diseñado para ello."
+    }
+  ],
+  "evidence_completeness": "partial",
+  "open_risks": [
+    "Los 16 sobres de evidencia siguen en approvals.decision='pending': la aprobación vive en el veredicto, no en el sobre. Es una decisión de diseño, no un olvido.",
+    "El workflow de CI nunca se ha ejecutado: GitHub Actions no está disponible en este entorno. Su primera ejecución real será la validación.",
+    "El commit inicial lo firma una identidad local de conveniencia (UEAS Builder <builder@ueas.local>), no el operador: el autor del commit es el agente que lo hizo.",
+    "No hay rama protegida ni revisión obligatoria: un push --force a main esquiva el CI.",
+    "El veredicto cita un aprobador por rol («Lead Architect / Human Approver»); no consta identidad nominal."
+  ],
+  "rollback": "git reset --hard (no aplicable: el commit es el estado inicial) · eliminar .github/workflows/ci.yml, TECH_DEBT.md, .gitattributes y el veredicto. El repositorio puede borrarse con Remove-Item .git -Recurse -Force.",
+  "self_approved": false,
+  "approvals": {
+    "verifier": null,
+    "decision": "pending",
+    "notes": "Paso 2 de la instrucción no ejecutado por R1; se entregó el veredicto como alternativa conforme al contrato."
+  }
+}

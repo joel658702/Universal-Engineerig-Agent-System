@@ -1,0 +1,79 @@
+{
+  "task_id": "TASK-006",
+  "agent": "BUILDER",
+  "requirement": "Impedir el replay de códigos TOTP dentro de su ventana de validez registrando los códigos usados por usuario y rechazando su reutilización, con limpieza acotada de la tabla.",
+  "risk": {
+    "level": "L3",
+    "justification": "Endurece la validación del segundo factor sin definir un mecanismo nuevo de identidad (F4=3). Corrijo un factor respecto a tu cálculo: F6=3, no 2, porque el radio es «todos los usuarios con MFA» y el motor mide alcance, no gravedad. El máximo sigue siendo 3.",
+    "factors": { "F1": 3, "F2": 2, "F3": 2, "F4": 3, "F5": 1, "F6": 3 }
+  },
+  "confirmation": {
+    "required": true,
+    "status": "pending",
+    "granted_by": null
+  },
+  "plan": [
+    {
+      "step": 1,
+      "description": "Migración 006: mfa_used_codes (user_id, code_hash, used_at) con PK (user_id, code_hash) e índice de limpieza por used_at. Se añade una columna step para trazabilidad del paso TOTP usado.",
+      "verifiable_by": "migrate up/down aplica y revierte; el índice de limpieza existe"
+    },
+    {
+      "step": 2,
+      "description": "Registro ATÓMICO en una sola sentencia, no check-then-insert: INSERT ... ON CONFLICT (user_id, code_hash) DO UPDATE SET used_at = now() WHERE mfa_used_codes.used_at < now() - interval '60 seconds' RETURNING user_id. Si no devuelve fila, el código está usado dentro de la ventana → replay.",
+      "verifiable_by": "test de dos canjes simultáneos con el mismo código: exactamente uno pasa"
+    },
+    {
+      "step": 3,
+      "description": "La comprobación se aplica a TODA validación TOTP, no solo al login: también en POST /auth/mfa/disable. Un código usado para entrar no puede servir para desactivar MFA.",
+      "verifiable_by": "test: el código usado en el login es rechazado en disable"
+    },
+    {
+      "step": 4,
+      "description": "El hash almacenado es SHA-256 del código junto al user_id, de modo que el mismo valor de 6 dígitos de dos usuarios distintos no colisiona.",
+      "verifiable_by": "test: dos usuarios pueden usar el mismo código sin interferirse"
+    },
+    {
+      "step": 5,
+      "description": "Rechazo indistinguible: replay, código inválido y token desconocido devuelven el mismo 400 mfa_verification_failed y el mismo trabajo (se ejecuta burnTotpTime también en el camino de replay).",
+      "verifiable_by": "test: los tres casos devuelven cuerpo idéntico"
+    },
+    {
+      "step": 6,
+      "description": "scripts/cleanup-mfa-used-codes.mjs: borra filas con used_at < now() - interval '120 seconds' (doble de la ventana), informa del número de filas y admite --dry-run. Exporta la función para poder probarla sin proceso hijo.",
+      "verifiable_by": "test: tras sembrar filas viejas y nuevas, la limpieza borra solo las viejas y devuelve el conteo"
+    },
+    {
+      "step": 7,
+      "description": "Tests de mfa-replay.test.ts: reutilización dentro de la ventana, reutilización tras expirar (con la fila antigua aún presente, para cubrir el ON CONFLICT DO UPDATE), aislamiento entre usuarios, limpieza e integración del login completo.",
+      "verifiable_by": "suite completa contra PostgreSQL 16 real con los tests nuevos"
+    }
+  ],
+  "files_expected": [
+    { "path": "services/auth/migrations/006_mfa_used_codes.up.sql", "action": "create" },
+    { "path": "services/auth/migrations/006_mfa_used_codes.down.sql", "action": "create" },
+    { "path": "services/auth/src/mfa.ts", "action": "modify" },
+    { "path": "services/auth/src/app.ts", "action": "modify" },
+    { "path": "services/auth/scripts/cleanup-mfa-used-codes.mjs", "action": "create" },
+    { "path": "services/auth/test/mfa-replay.test.ts", "action": "create" },
+    { "path": "TECH_DEBT.md", "action": "modify" },
+    { "path": ".ueas/evidence/UEAS-022-task006.evidence.json", "action": "create" }
+  ],
+  "evidence_planned": [
+    "salida del test de reutilización dentro de la ventana (400)",
+    "salida del test de reutilización tras expirar (200 de nuevo, con la fila antigua presente)",
+    "prueba de concurrencia: dos canjes simultáneos → uno 200 y otro 400",
+    "conteo de filas antes y después de la limpieza",
+    "suite completa contra PostgreSQL 16 real",
+    "consulta a mfa_used_codes mostrando que solo se guardan hashes, nunca códigos en claro"
+  ],
+  "rollback": "migrate down de 006; revertir mfa.ts y app.ts; eliminar el script de limpieza y su test. Sin la tabla, el comportamiento vuelve exactamente al de TASK-004.",
+  "stop_conditions": [
+    "Si ON CONFLICT ... DO UPDATE ... WHERE no funciona en el motor de pruebas, los tests correspondientes se declaran omitidos; no se sustituye por check-then-insert silencioso",
+    "Si el registro atómico no puede probarse con concurrencia real, se declara not_run",
+    "Si la limpieza automática no puede programarse (no hay cron en este entorno), se entrega el script y se declara que la programación queda fuera",
+    "Si el operador no aprueba el L3, no se ejecuta"
+  ],
+  "state": "PROPUESTA",
+  "created_at": "2026-11-02T12:05:00-05:00"
+}

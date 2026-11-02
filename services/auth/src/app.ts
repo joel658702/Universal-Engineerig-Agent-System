@@ -11,6 +11,25 @@ import { z } from "zod";
 
 import { authenticateRequest } from "./authenticate.ts";
 import { createNullMailer, type DevMailer, type Mailer } from "./mailer.ts";
+import {
+  buildOtpAuthUri,
+  burnTotpTime,
+  confirmMfaSecret,
+  consumeBackupCode,
+  consumeMfaChallenge,
+  createMfaChallenge,
+  decryptSecret,
+  deleteMfa,
+  encryptSecret,
+  generateBackupCodes,
+  generateMfaSecret,
+  getMfaSecretRow,
+  hashBackupCode,
+  isMfaEnabled,
+  replaceBackupCodes,
+  savePendingSecret,
+  verifyTotp,
+} from "./mfa.ts";
 import { consumeResetToken, createResetRequest } from "./passwordReset.ts";
 import {
   clearAuthCookies,
@@ -33,12 +52,16 @@ import { generateRefreshToken, signAccessToken, type TokenConfig } from "./token
 import {
   createUser,
   findUserByEmail,
+  findUserById,
   insertRefreshToken,
   isUniqueViolation,
   revokeAllUserRefreshTokens,
   updatePasswordHash,
   type Queryable,
+  type UserRow,
 } from "./users.ts";
+
+const MFA_CHALLENGE_TTL_SECONDS = 300;
 
 const MIN_PASSWORD_LENGTH = 12;
 const MAX_PASSWORD_LENGTH = 128;
@@ -75,6 +98,20 @@ const resetPasswordSchema = z.object({
   new_password: z.string().min(MIN_PASSWORD_LENGTH).max(MAX_PASSWORD_LENGTH),
 });
 
+const mfaCodeSchema = z.object({
+  code: z.string().trim().min(6).max(16),
+});
+
+const mfaVerifySchema = z.object({
+  mfa_token: z.string().min(20).max(256),
+  code: z.string().trim().min(6).max(16),
+});
+
+const mfaDisableSchema = z.object({
+  password: z.string().min(1).max(MAX_PASSWORD_LENGTH),
+  code: z.string().trim().min(6).max(16),
+});
+
 type Handler = (req: Request, res: Response) => Promise<unknown>;
 
 /** Express 4 no captura rechazos de promesas: se envuelve. */
@@ -91,6 +128,8 @@ export type RateLimitSettings = {
   refreshPerFamily: { limit: number; windowMs: number };
   forgotPerIp: { limit: number; windowMs: number };
   forgotPerEmail: { limit: number; windowMs: number };
+  mfaTotpPerUser: { limit: number; windowMs: number };
+  mfaBackupPerUser: { limit: number; windowMs: number };
 };
 
 /** Valores de arranque: ajustables por configuración, no dogma. */
@@ -101,6 +140,8 @@ export const DEFAULT_RATE_LIMITS: RateLimitSettings = {
   refreshPerFamily: { limit: 10, windowMs: 60_000 },
   forgotPerIp: { limit: 3, windowMs: 60_000 },
   forgotPerEmail: { limit: 3, windowMs: 60_000 },
+  mfaTotpPerUser: { limit: 5, windowMs: 60_000 },
+  mfaBackupPerUser: { limit: 3, windowMs: 60_000 },
 };
 
 export type AppDeps = {
@@ -118,6 +159,8 @@ export type AppDeps = {
   mailer?: Mailer;
   /** Monta GET /_dev/outbox. El llamador debe aplicarlo solo con doble guardia. */
   devOutbox?: boolean;
+  /** Clave maestra de 32 bytes para cifrar los secretos TOTP. */
+  mfaKey?: Buffer;
 };
 
 function rejectRateLimited(res: Response, retryAfterSeconds: number): void {
@@ -141,6 +184,8 @@ export function createApp(deps: AppDeps): Express {
   const refreshLimiter: RateLimiter = createRateLimiter({ ...limits.refreshPerFamily, ...(clock ? { now: clock } : {}) });
   const forgotIpLimiter: RateLimiter = createRateLimiter({ ...limits.forgotPerIp, ...(clock ? { now: clock } : {}) });
   const forgotEmailLimiter: RateLimiter = createRateLimiter({ ...limits.forgotPerEmail, ...(clock ? { now: clock } : {}) });
+  const mfaTotpLimiter: RateLimiter = createRateLimiter({ ...limits.mfaTotpPerUser, ...(clock ? { now: clock } : {}) });
+  const mfaBackupLimiter: RateLimiter = createRateLimiter({ ...limits.mfaBackupPerUser, ...(clock ? { now: clock } : {}) });
 
   const mailer: Mailer = deps.mailer ?? createNullMailer();
   const devOutbox =
@@ -167,6 +212,75 @@ export function createApp(deps: AppDeps): Express {
     if (!viaCookie) return false;
     if (req.method === "GET" || req.method === "HEAD") return false;
     return !csrfTokenMatches(req);
+  };
+
+  const mfaKey = deps.mfaKey ?? null;
+
+  /** Resuelve el usuario de la petición o responde 401/403. */
+  const requireUser = async (req: Request, res: Response): Promise<UserRow | null> => {
+    const resolved = readAccessToken(req);
+    if (!resolved) {
+      res.status(401).json({ error: "unauthorized" });
+      return null;
+    }
+    if (csrfFailed(req, resolved.viaCookie)) {
+      res.status(403).json({ error: "csrf_failed" });
+      return null;
+    }
+    const user = await authenticateRequest(deps.db, deps.tokens, `Bearer ${resolved.token}`);
+    if (!user) {
+      res.status(401).json({ error: "unauthorized" });
+      return null;
+    }
+    return user;
+  };
+
+  /** Emite access + refresh y escribe la respuesta según el modo. */
+  const issueSession = async (
+    user: UserRow,
+    req: Request,
+    res: Response,
+    extra: Record<string, unknown> = {},
+    status = 200,
+  ) => {
+    const accessToken = await signAccessToken(deps.tokens, user.id, user.token_version);
+    const refresh = generateRefreshToken();
+
+    await insertRefreshToken(deps.db, {
+      userId: user.id,
+      familyId: randomUUID(),
+      tokenHash: refresh.hash,
+      expiresAt: new Date(Date.now() + refreshTtl * 1000),
+      userAgent: req.header("user-agent") ?? null,
+    });
+
+    if (wantsCookies(mode)) {
+      setAuthCookies(res, accessToken, refresh.token);
+      issueCsrfToken(res);
+    }
+
+    if (mode === "cookie") return res.status(status).json({ token_type: "cookie", ...extra });
+
+    return res.status(status).json({
+      access_token: accessToken,
+      token_type: "Bearer",
+      expires_in: deps.tokens.accessTtlSeconds,
+      refresh_token: refresh.token,
+      ...extra,
+    });
+  };
+
+  /** Sube token_version y devuelve la versión nueva. */
+  const bumpTokenVersion = async (userId: string): Promise<number> => {
+    const result = await deps.db.query<{ token_version: number }>(
+      `update users
+          set token_version = token_version + 1,
+              updated_at = now()
+        where id = $1
+        returning token_version`,
+      [userId],
+    );
+    return result.rows[0]?.token_version ?? 0;
   };
 
   app.disable("x-powered-by");
@@ -228,30 +342,17 @@ export function createApp(deps: AppDeps): Express {
 
       if (user.disabled_at) return res.status(403).json({ error: "account_disabled" });
 
-      const accessToken = await signAccessToken(deps.tokens, user.id, user.token_version);
-      const refresh = generateRefreshToken();
-
-      await insertRefreshToken(deps.db, {
-        userId: user.id,
-        familyId: randomUUID(),
-        tokenHash: refresh.hash,
-        expiresAt: new Date(Date.now() + refreshTtl * 1000),
-        userAgent: req.header("user-agent") ?? null,
-      });
-
-      if (wantsCookies(mode)) {
-        setAuthCookies(res, accessToken, refresh.token);
-        issueCsrfToken(res);
+      if (await isMfaEnabled(deps.db, user.id)) {
+        // Segundo factor pendiente: no se emiten tokens de sesión todavía.
+        const mfaToken = await createMfaChallenge(deps.db, user.id, MFA_CHALLENGE_TTL_SECONDS);
+        return res.status(200).json({
+          mfa_required: true,
+          mfa_token: mfaToken,
+          expires_in: MFA_CHALLENGE_TTL_SECONDS,
+        });
       }
 
-      if (mode === "cookie") return res.status(200).json({ token_type: "cookie" });
-
-      return res.status(200).json({
-        access_token: accessToken,
-        token_type: "Bearer",
-        expires_in: deps.tokens.accessTtlSeconds,
-        refresh_token: refresh.token,
-      });
+      return issueSession(user, req, res);
     }),
   );
 
@@ -438,6 +539,198 @@ export function createApp(deps: AppDeps): Express {
       res.status(200).json({ messages: devOutbox });
     });
   }
+
+  // ------------------------------------------------------------- MFA
+
+  app.post(
+    "/auth/mfa/setup",
+    asyncHandler(async (req, res) => {
+      const user = await requireUser(req, res);
+      if (!user) return;
+      if (!mfaKey) return res.status(503).json({ error: "mfa_unavailable" });
+
+      const secret = generateMfaSecret();
+      try {
+        await savePendingSecret(deps.db, user.id, encryptSecret(secret, mfaKey));
+      } catch (error) {
+        if (error instanceof Error && error.message === "mfa_already_enabled") {
+          return res.status(409).json({ error: "mfa_already_enabled" });
+        }
+        throw error;
+      }
+
+      return res.status(200).json({
+        secret,
+        otpauth_uri: buildOtpAuthUri(secret, user.email),
+      });
+    }),
+  );
+
+  app.post(
+    "/auth/mfa/verify-setup",
+    asyncHandler(async (req, res) => {
+      const user = await requireUser(req, res);
+      if (!user) return;
+
+      const parsed = mfaCodeSchema.safeParse(req.body);
+      if (!parsed.success) return res.status(400).json({ error: "invalid_request" });
+      if (!mfaKey) return res.status(503).json({ error: "mfa_unavailable" });
+
+      const row = await getMfaSecretRow(deps.db, user.id);
+      if (!row || row.confirmed_at !== null) {
+        burnTotpTime(parsed.data.code);
+        return res.status(400).json({ error: "mfa_setup_not_pending" });
+      }
+
+      let secret: string;
+      try {
+        secret = decryptSecret(
+          { ciphertext: row.secret_ciphertext, iv: row.iv, authTag: row.auth_tag },
+          mfaKey,
+        );
+      } catch {
+        return res.status(500).json({ error: "mfa_secret_unreadable" });
+      }
+
+      if (!verifyTotp(secret, parsed.data.code)) {
+        return res.status(400).json({ error: "invalid_code" });
+      }
+
+      await confirmMfaSecret(deps.db, user.id);
+
+      const codes = generateBackupCodes();
+      await replaceBackupCodes(deps.db, user.id, codes.map(hashBackupCode));
+
+      // Activar MFA revoca las sesiones previas; se emite un par nuevo para no
+      // expulsar al cliente que acaba de activarlo.
+      const version = await bumpTokenVersion(user.id);
+      return issueSession({ ...user, token_version: version }, req, res, { backup_codes: codes });
+    }),
+  );
+
+  app.post(
+    "/auth/mfa/verify",
+    asyncHandler(async (req, res) => {
+      const parsed = mfaVerifySchema.safeParse(req.body);
+      if (!parsed.success) return res.status(400).json({ error: "invalid_request" });
+
+      // El desafío es de un solo uso: se consume antes de validar el código.
+      const userId = await consumeMfaChallenge(deps.db, parsed.data.mfa_token);
+      if (!userId) {
+        burnTotpTime(parsed.data.code);
+        return res.status(400).json({ error: "mfa_verification_failed" });
+      }
+
+      const decision = mfaTotpLimiter.check(`mfa:totp:${userId}`);
+      if (!decision.allowed) return rejectRateLimited(res, decision.retryAfterSeconds);
+
+      const user = await findUserById(deps.db, userId);
+      const row = user ? await getMfaSecretRow(deps.db, userId) : null;
+
+      // Mismo código y mismo coste si no hay MFA activo que si el código falla.
+      if (!user || !row || row.confirmed_at === null || !mfaKey) {
+        burnTotpTime(parsed.data.code);
+        return res.status(400).json({ error: "mfa_verification_failed" });
+      }
+
+      let secret: string;
+      try {
+        secret = decryptSecret(
+          { ciphertext: row.secret_ciphertext, iv: row.iv, authTag: row.auth_tag },
+          mfaKey,
+        );
+      } catch {
+        return res.status(400).json({ error: "mfa_verification_failed" });
+      }
+
+      if (!verifyTotp(secret, parsed.data.code)) {
+        return res.status(400).json({ error: "mfa_verification_failed" });
+      }
+
+      return issueSession(user, req, res);
+    }),
+  );
+
+  app.post(
+    "/auth/mfa/recovery",
+    asyncHandler(async (req, res) => {
+      const parsed = mfaVerifySchema.safeParse(req.body);
+      if (!parsed.success) return res.status(400).json({ error: "invalid_request" });
+
+      const userId = await consumeMfaChallenge(deps.db, parsed.data.mfa_token);
+      if (!userId) return res.status(400).json({ error: "mfa_verification_failed" });
+
+      const decision = mfaBackupLimiter.check(`mfa:backup:${userId}`);
+      if (!decision.allowed) return rejectRateLimited(res, decision.retryAfterSeconds);
+
+      const used = await consumeBackupCode(deps.db, userId, hashBackupCode(parsed.data.code));
+      if (!used) return res.status(400).json({ error: "mfa_verification_failed" });
+
+      const user = await findUserById(deps.db, userId);
+      if (!user) return res.status(400).json({ error: "mfa_verification_failed" });
+
+      // Un backup code usado puede significar dispositivo comprometido:
+      // se revocan todas las sesiones anteriores.
+      const version = await bumpTokenVersion(userId);
+      return issueSession({ ...user, token_version: version }, req, res);
+    }),
+  );
+
+  app.get(
+    "/auth/mfa/backup-codes",
+    asyncHandler(async (req, res) => {
+      const user = await requireUser(req, res);
+      if (!user) return;
+
+      const codes = generateBackupCodes();
+      await replaceBackupCodes(deps.db, user.id, codes.map(hashBackupCode));
+
+      const version = await bumpTokenVersion(user.id);
+      return issueSession({ ...user, token_version: version }, req, res, { backup_codes: codes });
+    }),
+  );
+
+  app.post(
+    "/auth/mfa/disable",
+    asyncHandler(async (req, res) => {
+      const user = await requireUser(req, res);
+      if (!user) return;
+
+      const parsed = mfaDisableSchema.safeParse(req.body);
+      if (!parsed.success) return res.status(400).json({ error: "invalid_request" });
+      if (!mfaKey) return res.status(503).json({ error: "mfa_unavailable" });
+
+      const decision = mfaTotpLimiter.check(`mfa:totp:${user.id}`);
+      if (!decision.allowed) return rejectRateLimited(res, decision.retryAfterSeconds);
+
+      const passwordOk = await verifyPassword(user.password_hash, parsed.data.password);
+      if (!passwordOk) return res.status(401).json({ error: "invalid_credentials" });
+
+      const row = await getMfaSecretRow(deps.db, user.id);
+      if (!row || row.confirmed_at === null) {
+        burnTotpTime(parsed.data.code);
+        return res.status(400).json({ error: "mfa_verification_failed" });
+      }
+
+      let secret: string;
+      try {
+        secret = decryptSecret(
+          { ciphertext: row.secret_ciphertext, iv: row.iv, authTag: row.auth_tag },
+          mfaKey,
+        );
+      } catch {
+        return res.status(400).json({ error: "mfa_verification_failed" });
+      }
+
+      if (!verifyTotp(secret, parsed.data.code)) {
+        return res.status(400).json({ error: "mfa_verification_failed" });
+      }
+
+      await deleteMfa(deps.db, user.id);
+      await bumpTokenVersion(user.id);
+      return res.status(204).end();
+    }),
+  );
 
   app.use((_req, res) => res.status(404).json({ error: "not_found" }));
 

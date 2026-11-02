@@ -109,6 +109,28 @@ Todas con `Secure` y `SameSite=Strict`. `Secure` implica que en desarrollo sin H
 
 `X-Content-Type-Options: nosniff` · `X-Frame-Options: DENY` · `X-XSS-Protection: 0` · `Strict-Transport-Security` · `Referrer-Policy: no-referrer` · `Permissions-Policy`. CSP se añade en `cookie` y `both`.
 
+## Segundo factor (MFA · TOTP)
+
+```bash
+# Requiere clave maestra de 32 bytes en base64
+MFA_MASTER_KEY=$(openssl rand -base64 32)
+```
+
+| Endpoint | Autenticación | Qué hace |
+|---|---|---|
+| `POST /auth/mfa/setup` | access | Genera secreto, lo guarda cifrado y devuelve la URI `otpauth://` |
+| `POST /auth/mfa/verify-setup` | access | Confirma con un código, devuelve 10 códigos de recuperación y un par de tokens nuevo |
+| `POST /auth/mfa/verify` | — | Canjea `mfa_token` + código por una sesión |
+| `POST /auth/mfa/recovery` | — | Canjea `mfa_token` + código de recuperación |
+| `GET /auth/mfa/backup-codes` | access | Regenera los 10 códigos e invalida los anteriores |
+| `POST /auth/mfa/disable` | access | Exige contraseña + código; borra secreto y códigos |
+
+Con MFA activo, `POST /auth/login` responde `{ mfa_required: true, mfa_token }` y **no** emite sesión. El `mfa_token` dura 5 minutos y es de un solo uso (tabla `mfa_challenges`).
+
+**TOTP**: implementación propia de RFC 6238 sobre `node:crypto`, validada contra los 5 vectores del Apéndice B en la suite. No se usa librería: `otplib@12` no acepta base32, ignora el tiempo por argumento y no reproduce los vectores publicados.
+
+**Secretos**: AES-256-GCM con IV aleatorio por registro y `key_id` para rotación futura. Si se pierde `MFA_MASTER_KEY`, todos los secretos son irrecuperables.
+
 ## Decisiones de diseño ya fijadas
 
 - Tokens de acceso **asimétricos** (EdDSA/RS256), 15 min, con `kid`.

@@ -1,0 +1,100 @@
+{
+  "task_id": "TASK-004",
+  "agent": "BUILDER",
+  "requirement": "Añadir segundo factor TOTP (RFC 6238): secretos cifrados con AES-256-GCM, activación en dos pasos, login en dos fases con mfa_token temporal, 10 códigos de recuperación de un solo uso, rate limiting específico y revocación de sesiones vía token_version.",
+  "risk": {
+    "level": "L4",
+    "justification": "Define un mecanismo nuevo de prueba de identidad (F4=4) y manipula credenciales de segundo factor (F1=4). Un fallo permite saltarse el segundo factor o bloquear cuentas. Requiere DE-005 o segunda firma: EX-001 y DE-004 no se propagan.",
+    "factors": { "F1": 4, "F2": 2, "F3": 2, "F4": 4, "F5": 3, "F6": 3 }
+  },
+  "confirmation": {
+    "required": true,
+    "status": "pending",
+    "granted_by": null
+  },
+  "plan": [
+    {
+      "step": 1,
+      "description": "Migración 004: user_mfa_secrets (user_id PK/FK, secret_ciphertext, iv, auth_tag, key_id, created_at, confirmed_at) y user_mfa_backup_codes (id, user_id FK, code_hash sha256, used_at).",
+      "verifiable_by": "migrate up aplica 004, down la revierte y schema_migrations cuadra en ambos sentidos"
+    },
+    {
+      "step": 2,
+      "description": "Cifrado AES-256-GCM en src/mfa.ts con clave maestra de 32 bytes desde MFA_MASTER_KEY, IV aleatorio por registro y key_id para permitir rotación futura. El secreto en claro no se guarda nunca ni se registra.",
+      "verifiable_by": "test: dos cifrados del mismo secreto producen salidas distintas; con la clave correcta se descifra y con otra falla la autenticación GCM"
+    },
+    {
+      "step": 3,
+      "description": "TOTP RFC 6238 (SHA-1, 30 s, 6 dígitos) mediante librería auditada, validado contra los vectores de prueba del Apéndice B del RFC: la corrección se comprueba con vectores publicados, no con la salida de la propia librería.",
+      "verifiable_by": "test con los vectores oficiales (T=59 → 94287082, etc.) y ventana de ±1 paso declarada"
+    },
+    {
+      "step": 4,
+      "description": "POST /auth/mfa/setup (autenticado): genera secreto, lo guarda cifrado con confirmed_at NULL y devuelve la URI otpauth:// para el QR. Llamarlo de nuevo reemplaza el secreto pendiente, nunca el ya confirmado.",
+      "verifiable_by": "test: setup devuelve otpauth:// con los parámetros correctos; un segundo setup no toca el secreto confirmado"
+    },
+    {
+      "step": 5,
+      "description": "POST /auth/mfa/verify-setup: valida el código contra el secreto pendiente; si es correcto marca confirmed_at, genera 10 códigos de recuperación y los devuelve una sola vez. Sube token_version y emite un par nuevo para no expulsar al cliente.",
+      "verifiable_by": "test: código inválido no activa; válido activa, devuelve 10 códigos y las sesiones anteriores dejan de valer"
+    },
+    {
+      "step": 6,
+      "description": "Login en dos fases: con MFA activo, POST /auth/login responde 200 con mfa_required y un mfa_token de 5 minutos, sin emitir access ni refresh. POST /auth/mfa/verify canjea mfa_token + código y emite los tokens.",
+      "verifiable_by": "test: login con MFA no devuelve access_token; el canje correcto sí; el mfa_token caducado responde 400"
+    },
+    {
+      "step": 7,
+      "description": "mfa_token de un solo uso: tabla mfa_challenges con hash del token, expires_at y used_at, consumido con UPDATE atómico igual que password_resets. Añadido al plan original (ver nota de desviación).",
+      "verifiable_by": "test: reutilizar el mismo mfa_token responde 400; dos canjes simultáneos → uno 200 y otro 400"
+    },
+    {
+      "step": 8,
+      "description": "Códigos de recuperación: 10 códigos de 10 bytes en base32, guardados como SHA-256, cada uso marca used_at y sube token_version. POST /auth/mfa/recovery (autenticado) los canjea; GET /auth/mfa/backup-codes regenera los 10 y sustituye a los anteriores.",
+      "verifiable_by": "test: un código funciona una vez; el segundo intento falla; regenerar invalida los anteriores"
+    },
+    {
+      "step": 9,
+      "description": "Anti-enumeración y tiempos: si MFA no está activo o el código es inválido, mismo estado y mismo cuerpo; se ejecuta un HMAC señuelo para igualar el coste. Comparación de dígitos en tiempo constante.",
+      "verifiable_by": "test: ambos casos devuelven 400 con el mismo cuerpo; medición de medianas dentro de la tolerancia declarada"
+    },
+    {
+      "step": 10,
+      "description": "Rate limiting reutilizando createRateLimiter: 5/min por usuario para TOTP y 3/min por usuario para códigos de recuperación.",
+      "verifiable_by": "test: el sexto intento TOTP y el cuarto de backup devuelven 429 con Retry-After"
+    },
+    {
+      "step": 11,
+      "description": "POST /auth/mfa/disable exige contraseña actual y código TOTP válido (o backup code); borra secreto y códigos y sube token_version.",
+      "verifiable_by": "test: sin contraseña o con código inválido no desactiva; con ambos desactiva y las sesiones anteriores mueren"
+    }
+  ],
+  "files_expected": [
+    { "path": "services/auth/migrations/004_mfa.up.sql", "action": "create" },
+    { "path": "services/auth/migrations/004_mfa.down.sql", "action": "create" },
+    { "path": "services/auth/src/mfa.ts", "action": "create" },
+    { "path": "services/auth/src/app.ts", "action": "modify" },
+    { "path": "services/auth/test/mfa.test.ts", "action": "create" },
+    { "path": "services/auth/README.md", "action": "modify" },
+    { "path": "TECH_DEBT.md", "action": "modify" },
+    { "path": ".ueas/evidence/UEAS-020-task004.evidence.json", "action": "create" }
+  ],
+  "evidence_planned": [
+    "salida de la suite completa contra PostgreSQL 16 real con los tests de MFA",
+    "vectores del RFC 6238 verificados con su valor esperado",
+    "prueba de que el secreto cifrado no se descifra con otra clave y que no aparece en claro en la tabla",
+    "flujo completo: setup → verify-setup → login en dos fases → canje",
+    "reutilización de mfa_token y de backup code rechazada",
+    "sesiones revocadas tras activar, desactivar y usar un backup code",
+    "medición de latencia entre MFA no activo y código inválido"
+  ],
+  "rollback": "migrate down de 004; revertir app.ts y eliminar mfa.ts y su test. Los usuarios con MFA activo quedarían sin segundo factor: la reversión exige avisar y es incompatible con datos ya cifrados si cambia MFA_MASTER_KEY.",
+  "stop_conditions": [
+    "Si la librería TOTP no supera los vectores del RFC, se detiene: no se parchea una implementación criptográfica a mano",
+    "Si el descifrado con clave incorrecta no falla, se detiene: sería un fallo de AES-GCM mal usado",
+    "Si el mfa_token de un solo uso no puede probarse con concurrencia real, se declara not_run",
+    "Si el operador no aporta DE-005 ni segunda firma, no se ejecuta (L4)"
+  ],
+  "state": "PROPUESTA",
+  "created_at": "2026-11-02T11:10:00-05:00"
+}

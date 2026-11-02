@@ -1,0 +1,136 @@
+{
+  "task_id": "TASK-004",
+  "agent": "BUILDER",
+  "requirement": "Añadir segundo factor TOTP propio (RFC 6238 sobre node:crypto), secretos cifrados con AES-256-GCM, activación en dos pasos, login en dos fases con mfa_token de un solo uso, 10 códigos de recuperación y rate limiting por usuario.",
+  "risk": {
+    "level": "L4",
+    "justification": "Define un mecanismo nuevo de prueba de identidad (F4=4) y manipula credenciales de segundo factor (F1=4). Ejecutado bajo DE-005. La dependencia TOTP desaparece al implementar RFC 6238 en casa, pero el nivel no baja: F1 y F4 mandan.",
+    "sensitive_data": true,
+    "critical_structures": true
+  },
+  "confirmation": {
+    "required": true,
+    "status": "granted",
+    "granted_by": "DE-005 — dispensa de doble firma para TASK-004 (operador humano, 2026-11-02)"
+  },
+  "changes": [
+    { "path": "services/auth/migrations/004_mfa.up.sql", "action": "create", "summary": "Tres tablas: user_mfa_secrets (cifrado + key_id), user_mfa_backup_codes (hash único) y mfa_challenges (token de un solo uso)." },
+    { "path": "services/auth/migrations/004_mfa.down.sql", "action": "create", "summary": "Reversión de las tres tablas." },
+    { "path": "services/auth/src/mfa.ts", "action": "create", "summary": "TOTP RFC 6238 con node:crypto, base32, AES-256-GCM, HMAC señuelo, backup codes y repositorio." },
+    { "path": "services/auth/src/app.ts", "action": "modify", "summary": "Seis endpoints de MFA, emisión de sesión extraída a issueSession, bumpTokenVersion y dos limitadores por usuario." },
+    { "path": "services/auth/test/mfa.test.ts", "action": "create", "summary": "11 tests: vectores RFC, cifrado, flujo completo, un solo uso, recuperación, rate limit y desactivación." },
+    { "path": "services/auth/README.md", "action": "modify", "summary": "Sección de MFA con endpoints, requisito de MFA_MASTER_KEY y advertencia de irrecuperabilidad." },
+    { "path": "TECH_DEBT.md", "action": "modify", "summary": "Partida 3 RESUELTA y partida 16 añadida (replay de TOTP dentro de la ventana)." },
+    { "path": "services/auth/package.json", "action": "modify", "summary": "otplib desinstalado tras descartarlo por no cumplir los vectores del RFC." },
+    { "path": ".ueas/decisions/DE-005.md", "action": "create", "summary": "Dispensa de doble firma, con las tres preguntas abiertas y el valor adoptado en cada una." },
+    { "path": ".ueas/evidence/UEAS-020-task004.evidence.json", "action": "create", "summary": "Evidencia de esta tarea." }
+  ],
+  "verification": [
+    {
+      "check": "TOTP contra los 5 vectores del RFC 6238",
+      "method": "test_suite",
+      "command": "test/mfa.test.ts :: 'TOTP coincide con los 5 vectores del RFC 6238'",
+      "result": "pass",
+      "output_excerpt": "T=59→94287082 · T=1111111109→07081804 · T=1111111111→14050471 · T=1234567890→89005924 · T=2000000000→69279037"
+    },
+    {
+      "check": "otplib descartado con evidencia (no por preferencia)",
+      "method": "command",
+      "command": "node .otplib_probe*.mjs (temporales, eliminados)",
+      "result": "fail",
+      "output_excerpt": "encoding base32 → excepción (solo admite ascii/base64/hex/latin1/utf8); tiempo por argumento ignorado (misma salida para T=59 y T=2000000000); con options.epoch varía pero ningún vector coincide. Contraste: HOTP propio con node:crypto acierta los 5 vectores."
+    },
+    {
+      "check": "Cifrado: IV distinto por registro y clave incorrecta falla",
+      "method": "test_suite",
+      "command": "test/mfa.test.ts :: 'el secreto se cifra con IV distinto y otra clave no lo descifra'",
+      "result": "pass",
+      "output_excerpt": "iv y ciphertext distintos entre dos cifrados del mismo secreto; decrypt con la clave correcta devuelve el secreto; con otra clave lanza error de autenticación GCM"
+    },
+    {
+      "check": "Flujo completo: setup → verify-setup → login en dos fases → canje",
+      "method": "test_suite",
+      "command": "test/mfa.test.ts :: 'flujo completo...'",
+      "result": "pass",
+      "output_excerpt": "setup 200 · verify-setup 200 con 10 códigos · access previo 401 · login devuelve mfa_required sin tokens · verify 200 con sesión válida"
+    },
+    {
+      "check": "El mfa_token es de un solo uso",
+      "method": "test_suite",
+      "command": "test/mfa.test.ts :: 'el mfa_token es de un solo uso'",
+      "result": "pass",
+      "output_excerpt": "primer canje 200; segundo con el mismo token 400"
+    },
+    {
+      "check": "Código inválido y cuenta sin MFA dan la misma respuesta",
+      "method": "test_suite",
+      "command": "test/mfa.test.ts :: 'código inválido y cuenta sin MFA dan la misma respuesta'",
+      "result": "pass",
+      "output_excerpt": "ambos 400 con cuerpo idéntico {error:'mfa_verification_failed'}; se ejecuta HMAC señuelo en el camino sin MFA"
+    },
+    {
+      "check": "Código de recuperación de un solo uso y regeneración",
+      "method": "test_suite",
+      "command": "test/mfa.test.ts :: 2 casos",
+      "result": "pass",
+      "output_excerpt": "primer uso 200, segundo 400; regenerar devuelve 10 nuevos y el código viejo deja de valer"
+    },
+    {
+      "check": "Rate limit por usuario: TOTP 5/min y backup 3/min",
+      "method": "test_suite",
+      "command": "test/mfa.test.ts :: 2 casos",
+      "result": "pass",
+      "output_excerpt": "intentos 1..5 → 400, el 6.º → 429 con Retry-After; intentos 1..3 → 400, el 4.º → 429"
+    },
+    {
+      "check": "Desactivación con contraseña + código y revocación de sesiones",
+      "method": "test_suite",
+      "command": "test/mfa.test.ts :: 'desactivar exige contraseña y código válido...'",
+      "result": "pass",
+      "output_excerpt": "contraseña mala 401; código inválido 400; ambos correctos 204; access anterior 401; el login ya no pide segundo factor"
+    },
+    {
+      "check": "Suite completa contra PostgreSQL 16 real",
+      "method": "test_suite",
+      "command": "TEST_DATABASE_URL=... node --test --test-isolation=none \"test/**/*.test.ts\"",
+      "result": "pass",
+      "output_excerpt": "tests 85 · pass 85 · fail 0 · skipped 0"
+    },
+    {
+      "check": "Suite completa con pg-mem",
+      "method": "test_suite",
+      "command": "node --test --test-isolation=none \"test/**/*.test.ts\"",
+      "result": "pass",
+      "output_excerpt": "tests 85 · pass 80 · fail 0 · skipped 5"
+    },
+    {
+      "check": "Drill F7 con las tres tablas nuevas",
+      "method": "test_suite",
+      "command": "node scripts/f7-drill.mjs",
+      "result": "pass",
+      "output_excerpt": "5 comprobaciones, 0 fallos"
+    },
+    {
+      "check": "Igualdad de tiempos entre MFA inactivo y código inválido (medición empírica)",
+      "method": "command",
+      "result": "not_run",
+      "not_run_reason": "La igualación se implementa con burnTotpTime, pero medirla con pocas muestras en este entorno daría un test inestable. No se declara verificada."
+    }
+  ],
+  "evidence_completeness": "partial",
+  "open_risks": [
+    "Un código TOTP es reutilizable dentro de su ventana de ±1 paso (~90 s): deuda 16.",
+    "MFA_MASTER_KEY sin rotación implementada: key_id existe pero no hay flujo para re-cifrar secretos.",
+    "Pérdida de la clave maestra = pérdida de todos los secretos TOTP, sin recuperación posible.",
+    "La igualdad de tiempos se implementa pero no se ha medido empíricamente.",
+    "MFA no está cableado en main.ts: no hay punto de composición que lea MFA_MASTER_KEY del entorno.",
+    "La suite no ha corrido en el contenedor Linux del CI tras este cambio."
+  ],
+  "rollback": "migrate down de 004; revertir app.ts y eliminar mfa.ts y su test. Los usuarios con MFA activo perderían el segundo factor y sus secretos cifrados.",
+  "self_approved": false,
+  "approvals": {
+    "verifier": null,
+    "decision": "pending",
+    "notes": "Ejecutado bajo DE-005 (una firma). Tres decisiones de diseño se adoptaron sin respuesta explícita y constan en la dispensa."
+  }
+}

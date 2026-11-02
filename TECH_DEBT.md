@@ -7,7 +7,7 @@
 |---|---|---|---|
 | 1 | **Rate limiting en memoria del proceso** | Con N instancias el límite real es N × configurado; un atacante reparte la carga entre réplicas | Escalar horizontalmente, o desplegar tras un balanceador |
 | 2 | **Sin VERIFIER independiente** | Todas las evidencias están en `pending`; la aprobación es del operador, no de un par | Primera tarea con dos personas en el equipo |
-| 3 | **Sin MFA** | Una contraseña filtrada basta para entrar | Antes de exponer la cuenta a datos sensibles |
+| 3 | ~~**Sin MFA**~~ · **RESUELTO** en TASK-004 | Era: una contraseña filtrada bastaba para entrar. Ahora TOTP RFC 6238 con secreto cifrado (AES-256-GCM), activación en dos pasos, `mfa_token` de un solo uso y 10 códigos de recuperación | Evidencia: UEAS-020 |
 | 4 | ~~**Sin recuperación de contraseña**~~ · **RESUELTO** en TASK-003 | Era: un usuario bloqueado no tenía salida autónoma. Ahora hay flujo con token de un solo uso (15 min), anti-enumeración, rate limit por correo/IP y revocación global de sesiones | Evidencia: UEAS-019 |
 | 5 | **Sin verificación de correo** | `email_verified_at` existe pero nadie lo escribe; se puede registrar el correo de otro | Antes de usar el correo como identificador de confianza |
 | 6 | **CSP con `style-src 'unsafe-inline'`** | Exfiltración por CSS posible si hay inyección de estilos | Cuando el frontend pueda usar `nonce` o `hash` |
@@ -20,6 +20,7 @@
 | 13 | **Sin CI hasta este commit** | Nada impedía fusionar sin ejecutar las verificaciones | Resuelto en `.github/workflows/ci.yml` (pendiente de primera ejecución real) |
 | 14 | **Sin rama protegida ni revisión obligatoria** | El CI avisa, pero un `push --force` a `main` lo esquiva | Al incorporar el segundo colaborador |
 | 15 | ~~**`migrate up` no es idempotente** — no existe tabla `schema_migrations`~~ · **RESUELTO** en TASK-002 | Era: re-ejecutar `up` rompía con `heap_create_with_catalog`. Ahora hay libro con checksum, transacción por migración, lock entre procesos y `baseline` | Evidencia: UEAS-018 |
+| 16 | **Un código TOTP es reutilizable dentro de su ventana (±1 paso ≈ 90 s)** | Un código interceptado (phishing en tiempo real, proxy) puede canjearse una segunda vez dentro de la ventana. No se registra el último `step` usado | Antes de exponer MFA a usuarios reales |
 
 ## Cómo se paga
 

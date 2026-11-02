@@ -1,0 +1,79 @@
+{
+  "task_id": "TASK-002",
+  "agent": "BUILDER",
+  "requirement": "Pagar la deuda 15: introducir tabla schema_migrations y hacer migrate up idempotente, con detección de drift por checksum, transacción por migración, bloqueo entre procesos y comando baseline para bases ya migradas.",
+  "risk": {
+    "level": "L3",
+    "justification": "No toca el mecanismo de autenticación (F4=1) pero un fallo del runner puede omitir migraciones y dejar el esquema divergente sin avisar: el radio de impacto alcanza a todos los usuarios del servicio (F6=3). Calculo L3, no L2.",
+    "factors": { "F1": 2, "F2": 2, "F3": 2, "F4": 1, "F5": 1, "F6": 3 }
+  },
+  "confirmation": {
+    "required": true,
+    "status": "granted",
+    "granted_by": "Operador humano, 2026-11-02: «continua» (tras la propuesta). No se pronunció sobre la discrepancia L2/L3; se mantuvo L3."
+  },
+  "plan": [
+    {
+      "step": 1,
+      "description": "Crear schema_migrations desde el propio runner (version text PK, name, checksum sha256, applied_at), no como archivo de migración, para evitar el huevo y la gallina.",
+      "verifiable_by": "test: tras up, la tabla existe con 2 filas y checksums de 64 hex"
+    },
+    {
+      "step": 2,
+      "description": "up: leer aplicadas, calcular pendientes y ejecutar cada una en su propia transacción con INSERT del registro; si la migración falla, no queda fila ni efecto.",
+      "verifiable_by": "test: migración rota lanza error, no crea objetos y no deja fila en schema_migrations"
+    },
+    {
+      "step": 3,
+      "description": "Idempotencia: segunda ejecución de up devuelve lista vacía, exit 0 y no lanza heap_create_with_catalog.",
+      "verifiable_by": "test de doble ejecución sobre PostgreSQL real: up; up → 0 pendientes"
+    },
+    {
+      "step": 4,
+      "description": "Detección de drift: si una versión aplicada cambia su checksum, abortar con mensaje que nombra el archivo.",
+      "verifiable_by": "test: alterar el .up.sql aplicado y volver a correr up → error de checksum"
+    },
+    {
+      "step": 5,
+      "description": "down: revertir en orden inverso solo lo registrado como aplicado y borrar su fila en la misma transacción.",
+      "verifiable_by": "test: down deja 0 filas y esquema sin tablas; up posterior reaplica"
+    },
+    {
+      "step": 6,
+      "description": "Bloqueo entre procesos con pg_advisory_lock durante up/down; si el motor no lo soporta (pg-mem) avisar por stderr y continuar sin lock.",
+      "verifiable_by": "test con PostgreSQL real: dos up simultáneos → uno aplica, el otro espera y ve 0 pendientes"
+    },
+    {
+      "step": 7,
+      "description": "Comando baseline: registrar como aplicadas las migraciones presentes en una base ya migrada, sin ejecutarlas. Exige --force para no confundirlo con un up.",
+      "verifiable_by": "test: base con tablas y libro vacío → baseline registra 2 filas sin tocar el esquema"
+    },
+    {
+      "step": 8,
+      "description": "Mantener el contrato actual: applyMigrations y rollbackMigrations siguen devolviendo el array de nombres, de modo que fixtures.ts, migrations.test.ts y f7-drill.mjs no cambian.",
+      "verifiable_by": "suite completa: 55/55 con pg-mem y con PostgreSQL real"
+    }
+  ],
+  "files_expected": [
+    { "path": "services/auth/scripts/migrate.mjs", "action": "modify" },
+    { "path": "services/auth/test/migrations_runner.test.ts", "action": "create" },
+    { "path": "TECH_DEBT.md", "action": "modify" },
+    { "path": ".ueas/evidence/UEAS-018-task002.evidence.json", "action": "create" }
+  ],
+  "evidence_planned": [
+    "salida de up dos veces seguidas sobre PostgreSQL real, mostrando 0 pendientes la segunda",
+    "select de schema_migrations con version, name y checksum",
+    "test de drift fallando con el nombre del archivo alterado",
+    "suite completa 55/55 + tests nuevos contra PostgreSQL real",
+    "drill F7 en verde tras el cambio",
+    "salida del job de CI replicado en contenedor Linux"
+  ],
+  "rollback": "Revertir migrate.mjs al commit 7ddac51, eliminar el test nuevo y hacer DROP TABLE schema_migrations. Las migraciones 001 y 002 y sus datos no se tocan en ningún caso.",
+  "stop_conditions": [
+    "Si pg-mem no soporta alguna construcción necesaria, se declara skip con motivo en lugar de simular cobertura",
+    "Si el bloqueo por advisory lock no puede probarse con dos procesos reales, se declara not_run",
+    "Si el contrato de applyMigrations/rollbackMigrations debe cambiar, se detiene y se consulta antes"
+  ],
+  "state": "APROBADA",
+  "created_at": "2026-11-02T10:10:00-05:00"
+}

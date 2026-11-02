@@ -20,7 +20,7 @@ import type { TokenConfig } from "../../src/tokens.ts";
 type RealClient = { query: (text: string, params?: unknown[]) => Promise<{ rows: any[] }> };
 let realClient: RealClient | null = null;
 
-async function makeRealDb(): Promise<RealClient> {
+async function getRealClient(): Promise<RealClient> {
   if (!realClient) {
     const pg = await import("pg");
     // allowExitOnIdle evita que el proceso de test quede vivo por una conexión
@@ -32,15 +32,35 @@ async function makeRealDb(): Promise<RealClient> {
     });
     realClient = pool as unknown as RealClient;
   }
-  await realClient.query("drop schema if exists public cascade");
-  await realClient.query("create schema public");
-  await applyMigrations(realClient);
   return realClient;
+}
+
+async function makeRealDb(): Promise<RealClient> {
+  const client = await getRealClient();
+  await client.query("drop schema if exists public cascade");
+  await client.query("create schema public");
+  await applyMigrations(client);
+  return client;
 }
 
 export async function makeMemDb() {
   // Con TEST_DATABASE_URL los mismos tests corren contra PostgreSQL real.
   if (process.env["TEST_DATABASE_URL"]) return makeRealDb();
+  const client = await makeEmptyDb();
+  await applyMigrations(client);
+  return client;
+}
+
+/** pg-mem sin migraciones aplicadas, para probar el runner desde cero. */
+export async function makeEmptyDb() {
+  // Igual que makeMemDb: con TEST_DATABASE_URL, motor real y esquema limpio.
+  if (process.env["TEST_DATABASE_URL"]) {
+    const client = await getRealClient();
+    await client.query("drop schema if exists public cascade");
+    await client.query("create schema public");
+    return client;
+  }
+
   const db = newDb();
   db.public.registerFunction({
     name: "gen_random_uuid",
@@ -70,7 +90,6 @@ export async function makeMemDb() {
   const adapter = db.adapters.createPg();
   const client = new adapter.Client();
   await client.connect();
-  await applyMigrations(client);
   return client;
 }
 

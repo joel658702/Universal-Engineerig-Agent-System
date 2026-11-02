@@ -19,7 +19,7 @@
 | 12 | **Sin límite de tamaño en `refresh_tokens.user_agent`** | Un cliente puede enviar un `User-Agent` enorme por sesión | Primera revisión de tamaño de tabla |
 | 13 | **Sin CI hasta este commit** | Nada impedía fusionar sin ejecutar las verificaciones | Resuelto en `.github/workflows/ci.yml` (pendiente de primera ejecución real) |
 | 14 | **Sin rama protegida ni revisión obligatoria** | El CI avisa, pero un `push --force` a `main` lo esquiva | Al incorporar el segundo colaborador |
-| 15 | **`migrate up` no es idempotente** — no existe tabla `schema_migrations` | Re-ejecutarlo sobre una base con esquema falla (`heap_create_with_catalog`); el CI funciona solo porque parte de una base vacía. Un re-deploy sobre datos existentes rompería | El primer despliegue sobre una base ya poblada |
+| 15 | ~~**`migrate up` no es idempotente** — no existe tabla `schema_migrations`~~ · **RESUELTO** en TASK-002 | Era: re-ejecutar `up` rompía con `heap_create_with_catalog`. Ahora hay libro con checksum, transacción por migración, lock entre procesos y `baseline` | Evidencia: UEAS-018 |
 
 ## Cómo se paga
 

@@ -1,0 +1,110 @@
+{
+  "task_id": "TASK-002",
+  "agent": "BUILDER",
+  "requirement": "Pagar la deuda 15: introducir schema_migrations y hacer migrate up idempotente, con checksum de drift, transacción por migración, bloqueo entre procesos y comando baseline.",
+  "risk": {
+    "level": "L3",
+    "justification": "No toca el mecanismo de autenticación (F4=1), pero un fallo del runner puede omitir migraciones y dejar el esquema divergente: el radio alcanza a todos los usuarios del servicio (F6=3). El operador aprobó con «continua» sin pronunciarse sobre la discrepancia L2/L3; se mantuvo L3.",
+    "sensitive_data": false,
+    "critical_structures": true
+  },
+  "confirmation": {
+    "required": true,
+    "status": "granted",
+    "granted_by": "Operador humano, 2026-11-02: «continua» tras la propuesta TASK-002"
+  },
+  "changes": [
+    { "path": "services/auth/scripts/migrate.mjs", "action": "modify", "summary": "Libro schema_migrations, idempotencia, checksum de drift, transacción por migración, pg_try_advisory_lock con espera acotada, comando baseline." },
+    { "path": "services/auth/test/migrations_runner.test.ts", "action": "create", "summary": "10 tests: registro, idempotencia, down, drift, migración rota, baseline y concurrencia de dos procesos." },
+    { "path": "services/auth/test/support/fixtures.ts", "action": "modify", "summary": "makeEmptyDb() nuevo y switch a PostgreSQL real también para él; el pool queda compartido con max:1." },
+    { "path": "TECH_DEBT.md", "action": "modify", "summary": "Partida 15 marcada como RESUELTA con su referencia de evidencia." },
+    { "path": ".ueas/proposals/TASK-002.proposal.json", "action": "modify", "summary": "Estado PROPUESTA → APROBADA con granted_by." },
+    { "path": ".ueas/evidence/UEAS-018-task002.evidence.json", "action": "create", "summary": "Evidencia de esta tarea." }
+  ],
+  "verification": [
+    {
+      "check": "El fallo original ya no ocurre: up dos veces seguidas por CLI",
+      "method": "command",
+      "command": "node scripts/migrate.mjs up ; node scripts/migrate.mjs up",
+      "result": "pass",
+      "output_excerpt": "primera: «up: sin migraciones pendientes (esquema al día)» · segunda: idéntica · exit=0 en ambas. Antes: heap_create_with_catalog"
+    },
+    {
+      "check": "Suite completa contra PostgreSQL 16 real",
+      "method": "test_suite",
+      "command": "TEST_DATABASE_URL=... node --test --test-isolation=none \"test/**/*.test.ts\"",
+      "result": "pass",
+      "output_excerpt": "tests 65 · pass 65 · fail 0 · skipped 0 — repetido 3 veces con el mismo resultado"
+    },
+    {
+      "check": "Suite completa con pg-mem (sin PostgreSQL)",
+      "method": "test_suite",
+      "command": "node --test --test-isolation=none \"test/**/*.test.ts\"",
+      "result": "pass",
+      "output_excerpt": "tests 65 · pass 60 · fail 0 · skipped 5 (los que exigen ROLLBACK real o semántica DDL que pg-mem no tiene)"
+    },
+    {
+      "check": "Idempotencia: la segunda ejecución no aplica ni duplica",
+      "method": "test_suite",
+      "command": "test/migrations_runner.test.ts :: 'segunda ejecución de up no aplica nada y no lanza'",
+      "result": "pass",
+      "output_excerpt": "devuelve [] y schema_migrations mantiene 2 filas"
+    },
+    {
+      "check": "Drift: editar una migración ya aplicada aborta",
+      "method": "test_suite",
+      "command": "test/migrations_runner.test.ts :: 'drift: una migración aplicada que se edita aborta el up'",
+      "result": "pass",
+      "output_excerpt": "rechaza con «checksum distinto en 001_users.up.sql» y no aplica nada"
+    },
+    {
+      "check": "Migración rota: no deja fila ni objeto",
+      "method": "test_suite",
+      "command": "test/migrations_runner.test.ts :: 2 casos",
+      "result": "pass",
+      "output_excerpt": "no se registra la versión 900; con PostgreSQL real, to_regclass de f2_probe es null (la transacción deshizo el CREATE)"
+    },
+    {
+      "check": "Baseline registra una base ya migrada sin ejecutar nada",
+      "method": "test_suite",
+      "command": "test/migrations_runner.test.ts :: 'baseline registra una base ya migrada sin ejecutar nada'",
+      "result": "pass",
+      "output_excerpt": "2 filas registradas con checksum de 64 hex; el up posterior devuelve []"
+    },
+    {
+      "check": "Concurrencia: dos procesos migrando a la vez",
+      "method": "test_suite",
+      "command": "test/migrations_runner.test.ts :: 'dos procesos aplicando a la vez'",
+      "result": "pass",
+      "output_excerpt": "pasó 3/3 ejecuciones aisladas y dentro de la suite: entre los dos aplican exactamente una vez cada migración, sin filas duplicadas"
+    },
+    {
+      "check": "Drill F7 sigue en verde tras el cambio",
+      "method": "test_suite",
+      "command": "node scripts/f7-drill.mjs",
+      "result": "pass",
+      "output_excerpt": "5 comprobaciones, 0 fallos"
+    },
+    {
+      "check": "El job de CI en contenedor Linux tras el cambio",
+      "method": "command",
+      "result": "not_run",
+      "not_run_reason": "No se re-ejecutó el job en contenedor tras TASK-002. La suite equivalente ya corrió contra PostgreSQL 16 real en local; el entorno Linux/Node 22 quedará cubierto en la próxima corrida del workflow."
+    }
+  ],
+  "evidence_completeness": "partial",
+  "open_risks": [
+    "pg-mem deja relaciones huérfanas (users_pkey) tras DROP TABLE: el ciclo down→up completo solo se verifica con PostgreSQL real y está declarado como skip.",
+    "El lock se desactiva por cliente cuando el motor no tiene pg_advisory_lock; en pg-mem no hay protección entre procesos (no aplica, pero conviene saberlo).",
+    "baseline exige --force y no detecta por sí mismo si el esquema real coincide con lo registrado: confía en el operador.",
+    "schema_migrations se crea desde el código, no como migración: un runner antiguo sobre una base nueva no la creará.",
+    "El job de CI en contenedor no se re-ejecutó tras el cambio (declarado arriba)."
+  ],
+  "rollback": "Revertir migrate.mjs y fixtures.ts al commit 7ddac51, eliminar migrations_runner.test.ts y hacer DROP TABLE schema_migrations. Las migraciones 001/002 y los datos no se tocan.",
+  "self_approved": false,
+  "approvals": {
+    "verifier": null,
+    "decision": "pending",
+    "notes": "Ejecutado bajo aprobación «continua». Nivel L3 mantenido pese a que el operador asumía L2: no se rebaja por silencio."
+  }
+}

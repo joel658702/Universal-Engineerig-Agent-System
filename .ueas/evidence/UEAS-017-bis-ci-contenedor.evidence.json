@@ -1,0 +1,92 @@
+{
+  "task_id": "UEAS-017-bis",
+  "agent": "BUILDER",
+  "requirement": "Ejecutar el CI y entregar evidencia de su primera corrida. GitHub Actions es inalcanzable desde este entorno (sin remoto, sin credenciales, sin red a github.com), así que se ejecutan ambos jobs en contenedores Linux con las mismas versiones y comandos.",
+  "risk": {
+    "level": "L2",
+    "justification": "Ejecución de las verificaciones del repositorio en contenedores; sin cambios en código de producción.",
+    "sensitive_data": false,
+    "critical_structures": true
+  },
+  "confirmation": {
+    "required": true,
+    "status": "granted",
+    "granted_by": "Operador humano, 2026-11-02: «Ejecuta el CI y entrégame la evidencia de la primera corrida» (reiterado tras el dry-run parcial)"
+  },
+  "changes": [
+    { "path": ".ueas/evidence/UEAS-017-bis-ci-contenedor.evidence.json", "action": "create", "summary": "Evidencia de esta tarea. Sustituye a UEAS-017 (dry-run en Windows) sin reescribirla." }
+  ],
+  "verification": [
+    {
+      "check": "Ejecución en GitHub Actions",
+      "method": "command",
+      "command": "gh / act / git remote -v / curl https://api.github.com",
+      "result": "not_run",
+      "not_run_reason": "gh y act no instalados; sin remoto configurado; sin GITHUB_TOKEN/GH_TOKEN; curl y Invoke-WebRequest fallan con SSL error 35 hacia github.com. No hay ruta a la infraestructura de Actions."
+    },
+    {
+      "check": "El workflow es YAML válido (parseado por yq en contenedor)",
+      "method": "command",
+      "command": "docker run --rm -v <repo>:/w mikefarah/yq:4 '.jobs | keys' /w/.github/workflows/ci.yml",
+      "result": "pass",
+      "output_excerpt": "- auth-service\n- governance\nexit=0  — cierra el not_run de UEAS-016 sobre el parseo del YAML"
+    },
+    {
+      "check": "Job auth-service: npm ci y npm audit --audit-level=high",
+      "method": "command",
+      "command": "node:22 + postgres:16-alpine · sh /tmp/job.sh (set -e)",
+      "result": "pass",
+      "output_excerpt": "El script usa `set -e`: se alcanzó «== JOB OK ==» tras npm ci y npm audit, luego ambos terminaron con éxito (no se capturaron sus líneas por truncado de la salida, pero un error habría detenido la ejecución)."
+    },
+    {
+      "check": "Job auth-service: migraciones y suite con el comando exacto del CI",
+      "method": "test_suite",
+      "command": "node --test --test-concurrency=1 \"test/**/*.test.ts\"",
+      "result": "pass",
+      "output_excerpt": "# tests 55 · # pass 55 · # fail 0 · # skipped 0 · duration_ms 19716 — con `--test-concurrency=1` y sin `--test-isolation=none`, igual que el workflow"
+    },
+    {
+      "check": "Job auth-service: drill F7",
+      "method": "test_suite",
+      "command": "node scripts/f7-drill.mjs",
+      "result": "pass",
+      "output_excerpt": "down/up true · migración fallida revertida · registro [201,409] · refresh [200,401] con 0 tokens vivos · BEGIN/ROLLBACK filas 0 · resumen 5/5"
+    },
+    {
+      "check": "Job auth-service: migrate down final",
+      "method": "command",
+      "command": "node scripts/migrate.mjs down",
+      "result": "pass",
+      "output_excerpt": "revertida: 002_refresh_tokens.down.sql / revertida: 001_users.down.sql · «== JOB OK ==» exit=0 en 204 s"
+    },
+    {
+      "check": "Job governance: selftest, artefactos y políticas",
+      "method": "test_suite",
+      "command": "python:3.12-slim · sh /tmp/gov.sh",
+      "result": "pass",
+      "output_excerpt": "6 casos · 0 fallos · 20 artefactos · 0 con fallos · 29 archivos escaneados · 0 hallazgos · «== GOVERNANCE OK ==» exit=0"
+    },
+    {
+      "check": "Entorno limpio tras la corrida",
+      "method": "command",
+      "command": "docker rm -f ueas-ci-db ; docker network rm ueas-ci",
+      "result": "pass",
+      "output_excerpt": "ueas-ci-db eliminado · ueas-ci eliminada · contenedores ueas restantes: 0"
+    }
+  ],
+  "evidence_completeness": "partial",
+  "open_risks": [
+    "No es GitHub Actions: se ejecutaron los comandos de los jobs en contenedores equivalentes, pero no el andamiaje propio de Actions (actions/checkout, actions/setup-node, service containers gestionados, imagen del runner).",
+    "El runner de Actions es ubuntu-latest con toolchain preinstalado; aquí se usó node:22 y python:3.12-slim. Diferencias de versiones de sistema no cubiertas.",
+    "La imagen del contenedor de servicio Postgres es la misma (postgres:16-alpine), pero su ciclo de vida lo gestiona Actions, no docker run.",
+    "Sigue sin haber remoto: el repositorio solo existe en esta máquina.",
+    "Deuda 15 (migrate up no idempotente) sigue abierta: el job pasa porque la base arranca vacía, igual que ocultaría el problema en Actions."
+  ],
+  "rollback": "Eliminar esta evidencia. No se modificó nada más; contenedores y red ya fueron retirados.",
+  "self_approved": false,
+  "approvals": {
+    "verifier": null,
+    "decision": "pending",
+    "notes": "Ambos jobs del workflow se ejecutaron en Linux con las mismas versiones de Node y PostgreSQL y los comandos literales del YAML. Lo que no se ejecutó es la capa de GitHub Actions."
+  }
+}

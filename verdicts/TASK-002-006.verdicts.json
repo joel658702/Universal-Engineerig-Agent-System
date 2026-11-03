@@ -1,0 +1,51 @@
+{
+  "verdicts": [
+    {
+      "task_id": "TASK-002",
+      "verifier": "joel658702 (Lead Architect)",
+      "date": "2026-11-03",
+      "decision": "APPROVED",
+      "evidence_ref": "UEAS-018",
+      "checks_reproduced": ["65/65 tests en PostgreSQL 16", "Migraciones idempotentes", "Drill F7"],
+      "self_verdict": false
+    },
+    {
+      "task_id": "TASK-003",
+      "verifier": "joel658702 (Lead Architect)",
+      "date": "2026-11-03",
+      "decision": "APPROVED",
+      "evidence_ref": "UEAS-019",
+      "checks_reproduced": ["74/74 tests en PostgreSQL 16", "Flujo de recuperación", "Anti-enumeración"],
+      "self_verdict": false
+    },
+    {
+      "task_id": "TASK-004",
+      "verifier": "joel658702 (Lead Architect)",
+      "date": "2026-11-03",
+      "decision": "APPROVED",
+      "evidence_ref": "UEAS-020",
+      "dispensation": "DE-005",
+      "checks_reproduced": ["85/85 tests en PostgreSQL 16", "TOTP RFC 6238 validado", "MFA con backup codes"],
+      "self_verdict": false
+    },
+    {
+      "task_id": "TASK-005",
+      "verifier": "joel658702 (Lead Architect)",
+      "date": "2026-11-03",
+      "decision": "APPROVED",
+      "evidence_ref": "UEAS-021",
+      "dispensation": "DE-006",
+      "checks_reproduced": ["95/95 tests en PostgreSQL 16", "Rotación de clave transaccional", "Recuperación con auditoría"],
+      "self_verdict": false
+    },
+    {
+      "task_id": "TASK-006",
+      "verifier": "joel658702 (Lead Architect)",
+      "date": "2026-11-03",
+      "decision": "APPROVED",
+      "evidence_ref": "UEAS-022",
+      "checks_reproduced": ["100/100 tests en PostgreSQL 16", "Anti-replay atómico", "Limpieza de códigos"],
+      "self_verdict": false
+    }
+  ]
+}
